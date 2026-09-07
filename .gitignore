@@ -1,12 +1,16 @@
-# dependencies
-node_modules/
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
 
-# local data — contains sqlite db, Chrome profile (QQ music login cookies) — NEVER commit
+# local data — sqlite db, Chrome profile (QQ music login cookies) — NEVER commit
 data/
 
 # logs & os junk
 *.log
 .DS_Store
+Thumbs.db
 
 # editor
 .vscode/

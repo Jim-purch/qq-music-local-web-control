@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>办公室点唱机</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<div id="gate" class="gate hidden">
+  <div class="gate-card">
+    <div class="gate-glow"></div>
+    <h1>办公室点唱机</h1>
+    <p class="gate-sub">起个名字，大家才知道这些歌是谁点的。</p>
+    <input id="gateName" maxlength="20" placeholder="你的昵称" autocomplete="off">
+    <input id="gatePin" maxlength="20" placeholder="口令（可选，用于换设备登录）">
+    <button id="gateBtn" class="btn-primary">进场</button>
+    <p id="gateErr" class="gate-err"></p>
+  </div>
+</div>
+
+<div class="shell">
+  <aside class="side">
+    <div class="brand"><span class="brand-dot"></span>点唱机</div>
+    <nav class="side-nav">
+      <button data-tab="now" class="active"><span class="ico">♪</span>正在播</button>
+      <button data-tab="search"><span class="ico">＋</span>点歌</button>
+      <button data-tab="playlists"><span class="ico">≡</span>歌单</button>
+      <button data-tab="stats"><span class="ico">▤</span>统计</button>
+      <button data-tab="settings"><span class="ico">⚙</span>设置</button>
+    </nav>
+    <div class="side-foot">
+      <div id="playerStatus" class="status-chip">未连接</div>
+      <div id="whoami" class="whoami"></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="main-col">
+      <!-- NOW PLAYING -->
+      <section id="tab-now" class="tab active">
+        <div class="np-card">
+          <div class="np-disc"><div class="np-disc-label"></div></div>
+          <div class="np-info">
+            <div class="np-label" id="npState">待命中</div>
+            <div class="np-title" id="npTitle">队列空空的</div>
+            <div class="np-singer" id="npSinger"></div>
+            <div class="np-by" id="npBy"></div>
+          </div>
+        </div>
+        <div class="controls">
+          <button id="btnPrev" class="ctl" title="上一首">⏮</button>
+          <button id="btnPlay" class="ctl ctl-main" title="播放/暂停（空格）">▶</button>
+          <button id="btnNext" class="ctl" title="切歌（N）">⏭</button>
+          <div class="vol">
+            <span class="vol-label">音量</span>
+            <input id="volSlider" type="range" min="0" max="100" value="50">
+            <span id="volNum" class="vol-num">50</span>
+          </div>
+        </div>
+        <div id="windowNotice" class="notice hidden"></div>
+        <p class="kbd-hint">空格 播放/暂停 · N 下一首 · P 上一首 · / 跳到点歌</p>
+      </section>
+
+      <!-- SEARCH -->
+      <section id="tab-search" class="tab">
+        <form id="searchForm" class="search-form">
+          <input id="searchInput" placeholder="歌名、歌手，随口说" autocomplete="off">
+          <button class="btn-primary" type="submit">点这首歌</button>
+        </form>
+        <p class="hint">回车即加入队列并播放。想先收进歌单，去「歌单」页添加。</p>
+        <div id="searchMsg" class="msg"></div>
+      </section>
+
+      <!-- PLAYLISTS -->
+      <section id="tab-playlists" class="tab">
+        <form id="plForm" class="pl-form">
+          <input id="plName" placeholder="新歌单名称" maxlength="40">
+          <button class="btn-primary" type="submit">建歌单</button>
+        </form>
+        <div id="plList" class="pl-list"></div>
+        <div id="plDetail" class="pl-detail hidden"></div>
+      </section>
+
+      <!-- STATS -->
+      <section id="tab-stats" class="tab">
+        <div class="stat-period">
+          <button data-p="day" class="chip active">今天</button>
+          <button data-p="week" class="chip">本周</button>
+          <button data-p="month" class="chip">本月</button>
+        </div>
+        <div id="statsBody"></div>
+        <h2 class="sec-title">放过的歌</h2>
+        <div id="historyList"></div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="tab-settings" class="tab">
+        <div class="set-block">
+          <h2 class="sec-title">播放器</h2>
+          <p class="hint" id="playerHint">启动后会打开一个 Chrome/Edge 窗口登录 QQ 音乐网页版，登录一次即可长期生效。</p>
+          <button id="btnStartPlayer" class="btn-primary">启动播放器</button>
+          <button id="btnOpenLogin" class="btn-ghost hidden">打开登录页（重新扫码）</button>
+        </div>
+        <div class="set-block">
+          <h2 class="sec-title">播放时段</h2>
+          <p class="hint">只在这些时段允许播放，时段结束自动暂停，到点自动继续。</p>
+          <form id="winForm" class="win-form">
+            <input id="winName" placeholder="时段名，如「午休」" maxlength="20">
+            <div class="win-row">
+              <label><input type="checkbox" name="wd" value="1" checked>一</label>
+              <label><input type="checkbox" name="wd" value="2" checked>二</label>
+              <label><input type="checkbox" name="wd" value="3" checked>三</label>
+              <label><input type="checkbox" name="wd" value="4" checked>四</label>
+              <label><input type="checkbox" name="wd" value="5" checked>五</label>
+              <label><input type="checkbox" name="wd" value="6">六</label>
+              <label><input type="checkbox" name="wd" value="0">日</label>
+            </div>
+            <div class="win-row">
+              <input id="winStart" type="time" value="12:00"> 到
+              <input id="winEnd" type="time" value="13:30">
+            </div>
+            <button class="btn-primary" type="submit">添加时段</button>
+          </form>
+          <div id="winList"></div>
+        </div>
+        <div class="set-block">
+          <h2 class="sec-title">身份</h2>
+          <p class="hint" id="whoamiHint"></p>
+          <button id="btnLogout" class="btn-ghost">换个名字</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- persistent right column: queue -->
+    <aside class="queue-col">
+      <h2 class="sec-title">接下来</h2>
+      <ol id="queueList" class="queue"></ol>
+    </aside>
+  </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
