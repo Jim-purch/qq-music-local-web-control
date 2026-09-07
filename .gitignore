@@ -1,0 +1,13 @@
+# dependencies
+node_modules/
+
+# local data — contains sqlite db, Chrome profile (QQ music login cookies) — NEVER commit
+data/
+
+# logs & os junk
+*.log
+.DS_Store
+
+# editor
+.vscode/
+.idea/

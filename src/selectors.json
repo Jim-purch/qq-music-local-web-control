@@ -1,0 +1,13 @@
+{
+  "searchBox": ["#ss_input", "input[placeholder*='搜索']", "input.search-input"],
+  "searchResultSongItem": [".songlist__list .songlist__list li", ".mod_search_result .song_list li"],
+  "songItemTitle": [".songlist__song .songlist__song_txt", ".song_title a", "a.song_name"],
+  "songItemSinger": [".songlist__artist a", ".singer_name a"],
+  "playBarSongName": [".player_music__info .player_music__title a", ".mod_player .song_name"],
+  "playBarSinger": [".player_music__info .player_music__author a", ".player_music__singer a"],
+  "btnPlayPause": [".player__btn--play", ".player_bar__play a.btn_play", "a.player_btn_play"],
+  "btnNext": [".player__btn--next", ".player_bar__next a.btn_next", "a.player_btn_next"],
+  "btnPrev": [".player__btn--prev", ".player_bar__prev a.btn_prev", "a.player_btn_prev"],
+  "playerVolumeSlider": [".player_bar__volume .volume__handle", ".volume_handle"],
+  "loginEntry": [".top_login__link", "#top_login a"]
+}
