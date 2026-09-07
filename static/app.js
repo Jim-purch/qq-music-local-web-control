@@ -47,9 +47,24 @@ function goto(tabName) {
 }
 $$('.side-nav button').forEach(b => b.onclick = () => goto(b.dataset.tab));
 
-// keyboard shortcuts
+// keyboard shortcuts — off by default, per-browser toggle (localStorage)
+let kbdEnabled = localStorage.getItem('juke_kbd') === '1';
+
+function refreshKbdUI() {
+  const toggle = $('#kbdToggle');
+  if (toggle) toggle.checked = kbdEnabled;
+  const hint = $('.kbd-hint');
+  if (hint) hint.classList.toggle('hidden', !kbdEnabled);
+}
+
+function setKbd(on) {
+  kbdEnabled = on;
+  localStorage.setItem('juke_kbd', on ? '1' : '0');
+  refreshKbdUI();
+}
+
 document.addEventListener('keydown', e => {
-  if (e.target.matches('input, textarea')) return;
+  if (!kbdEnabled || e.target.matches('input, textarea')) return;
   if (e.code === 'Space') { e.preventDefault(); api('/api/control/pause', { method: 'POST' }).catch(showErr); }
   else if (e.key.toLowerCase() === 'n') api('/api/control/next', { method: 'POST' }).catch(showErr);
   else if (e.key.toLowerCase() === 'p') api('/api/control/prev', { method: 'POST' }).catch(showErr);
@@ -271,6 +286,9 @@ async function refreshPlayerStatus() {
       : '启动后会打开一个 Chrome/Edge 窗口登录 QQ 音乐网页版，登录一次即可长期生效。';
   } catch {}
 }
+const kbdToggleEl = $('#kbdToggle');
+if (kbdToggleEl) kbdToggleEl.onchange = () => setKbd(kbdToggleEl.checked);
+
 $('#btnStartPlayer').onclick = async () => {
   try { await api('/api/player/start', { method: 'POST' }); refreshPlayerStatus(); }
   catch (e) { showErr(e); }
@@ -315,6 +333,7 @@ function showErr(e) { console.error(e); alert(e.message || e); }
 // ---------- boot ----------
 (async () => {
   await checkMe();
+  refreshKbdUI();
   connectWS();
   loadVol();
   refreshPlayerStatus();

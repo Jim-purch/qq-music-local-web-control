@@ -255,6 +255,13 @@ input[type=range] { accent-color: var(--amber); width: 140px; }
 .win-item .wi-info span { color: var(--cream-dim); font-size: 13px; }
 .win-item.off { opacity: .45; }
 
+.switch-row {
+  display: inline-flex; align-items: center; gap: 10px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px;
+  background: var(--panel); font-size: 14px;
+}
+.switch-row input { accent-color: var(--amber); width: 18px; height: 18px; }
+
 :focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 
 /* ---------- responsive: narrow screens collapse to single column ---------- */
