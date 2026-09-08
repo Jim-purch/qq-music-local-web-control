@@ -80,6 +80,10 @@ static/          # 前端（桌面优先，窄屏自适应单列）
 data/            # 运行时数据（git 忽略）
 ```
 
+## 桌面客户端方案（调研中）
+
+正在评估把播放内核从网页版换成 **QQ 音乐 Windows 桌面客户端**（音质/曲库更好，且不用维护网页选择器）：SMTC 系统媒体会话做播放控制，`qqmusic://` 深链做点歌。可行性、风险与整合方案见 [docs/desktop-client-plan.md](docs/desktop-client-plan.md)；在目标 Windows 机上先用 `scripts/win_desktop_poc.py` 做三步 PoC 验证再动工。
+
 ## 已知限制
 
 - 网页版播放音质/曲目范围受 QQ 音乐网页端限制
