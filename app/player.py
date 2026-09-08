@@ -11,7 +11,7 @@ import time
 import urllib.parse
 from typing import Optional
 
-from playwright.async_api import async_playwright, Browser, Page
+from playwright.async_api import async_playwright, BrowserContext, Page
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROFILE_DIR = os.path.join(BASE_DIR, "data", "chrome-profile")
@@ -22,9 +22,19 @@ with open(SELECTORS_PATH, encoding="utf-8") as f:
     SELECTORS = json.load(f)
 
 _pw = None
-_browser: Optional[Browser] = None
+_browser: Optional[BrowserContext] = None
 _page: Optional[Page] = None
+_browser_closed = True  # launch_persistent_context returns a BrowserContext, which has no is_connected()
 _lock = asyncio.Lock()
+
+
+def _on_browser_closed(*_):
+    global _browser_closed
+    _browser_closed = True
+
+
+def _connected() -> bool:
+    return bool(_browser and not _browser_closed)
 
 
 async def _first_locator(names: str):
@@ -40,10 +50,15 @@ async def _first_locator(names: str):
 
 async def start():
     """Launch a persistent, visible Chromium and open y.qq.com."""
-    global _pw, _browser, _page
+    global _pw, _browser, _page, _browser_closed
     async with _lock:
-        if _browser and _browser.is_connected():
+        if _connected():
             return
+        if _pw:  # stale playwright from a closed browser
+            try:
+                await _pw.stop()
+            except Exception:
+                pass
         _pw = await async_playwright().start()
         # Prefer installed Chrome/Edge on Windows; fall back to bundled Chromium.
         launch_kwargs = dict(
@@ -60,6 +75,8 @@ async def start():
                 continue
         if not _browser:
             _browser = await _pw.chromium.launch_persistent_context(**launch_kwargs)
+        _browser_closed = False
+        _browser.on("close", _on_browser_closed)
         _page = _browser.pages[0] if _browser.pages else await _browser.new_page()
         try:
             await _page.goto(START_URL, wait_until="domcontentloaded", timeout=60000)
@@ -68,21 +85,48 @@ async def start():
 
 
 def is_running() -> bool:
-    return bool(_browser and _browser.is_connected())
+    return _connected()
+
+
+async def _ensure_page():
+    """Make sure the browser is up and _page points to a live page.
+
+    Handles: browser closed by user (relaunch), tab closed (re-pick page).
+    """
+    global _page
+    if not _connected():
+        await start()
+    if _browser and (_page is None or _page.is_closed()):
+        _page = _browser.pages[0] if _browser.pages else await _browser.new_page()
+
+
+def _page_alive() -> bool:
+    return bool(_page and not _page.is_closed())
 
 
 async def open_login_page():
-    if not _page:
-        raise RuntimeError("播放器未启动")
+    await _ensure_page()
     try:
         await _page.goto("https://y.qq.com/portal/profile.html", wait_until="domcontentloaded", timeout=60000)
     except Exception:
         pass
-    await _page.bring_to_front()
+    try:
+        await _page.bring_to_front()
+    except Exception:
+        pass
 
 
 async def is_logged_in() -> bool:
-    if not _page:
+    # Cookie check is far more reliable than DOM selectors on y.qq.com.
+    if _connected() and _browser:
+        try:
+            cookies = await _browser.cookies("https://y.qq.com")
+            for c in cookies:
+                if c["name"] in ("uin", "qqmusic_uin") and any(ch.isdigit() for ch in c["value"]):
+                    return True
+        except Exception:
+            pass
+    if not _page_alive():
         return False
     for sel in SELECTORS["loginAvatar"]:
         try:
@@ -96,9 +140,11 @@ async def is_logged_in() -> bool:
 
 async def search_and_play(keyword: str, index: int = 0) -> dict:
     """Search on y.qq.com and click the Nth song. Returns {title, singer}."""
-    if not _page:
-        raise RuntimeError("播放器未启动")
-    await _page.bring_to_front()
+    await _ensure_page()
+    try:
+        await _page.bring_to_front()
+    except Exception:
+        pass
     url = "https://y.qq.com/n/ryqq/search?w=%s&t=song" % urllib.parse.quote(keyword)
     try:
         await _page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -158,9 +204,11 @@ async def search_and_play(keyword: str, index: int = 0) -> dict:
 
 async def control(action: str):
     """action in playPause / next / prev."""
-    if not _page:
-        raise RuntimeError("播放器未启动")
-    await _page.bring_to_front()
+    await _ensure_page()
+    try:
+        await _page.bring_to_front()
+    except Exception:
+        pass
     btn = await _first_locator("btnPlayPause" if action == "playPause" else
                                "btnNext" if action == "next" else "btnPrev")
     if not btn:
@@ -170,7 +218,7 @@ async def control(action: str):
 
 
 async def now_playing() -> Optional[dict]:
-    if not _page:
+    if not _page_alive():
         return None
     for sel in SELECTORS["playBarSongName"]:
         try:
@@ -194,7 +242,8 @@ async def now_playing() -> Optional[dict]:
 
 
 async def stop():
-    global _browser, _pw
+    global _browser, _pw, _browser_closed
+    _browser_closed = True
     if _browser:
         try:
             await _browser.close()
