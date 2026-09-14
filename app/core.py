@@ -5,6 +5,7 @@ import json
 import threading
 
 from .player_select import player
+from . import keepalive
 from .db import get_db, init_db
 
 state = {
@@ -242,6 +243,22 @@ _last_seen_title = ""
 _mismatch_polls = 0
 
 
+def _update_keepalive(np):
+    """根据真实播放状态驱动蓝牙保活：只有确认正在播放才停静音流，
+    暂停/空闲/客户端无会话都保持（避免长时间暂停导致蓝牙音箱断连）。
+    切歌间隙（switching）不动它，避免 5~15 秒的搜索间隙反复启停。"""
+    if np and np.get("playing") is True:
+        keepalive.stop()
+        return
+    if np and np.get("playing") is None:
+        # 网页版后端不回报播放状态：用 core 状态近似判断
+        if state["current"] and not state["paused"]:
+            keepalive.stop()
+            return
+    if not state["switching"]:
+        keepalive.start()
+
+
 async def poll_now_playing():
     """轮询 SMTC 正在播放，检测自然切歌。
 
@@ -255,6 +272,7 @@ async def poll_now_playing():
         try:
             np = await player.now_playing()
             state["nowPlaying"] = np
+            _update_keepalive(np)
             if np:
                 key = np["title"]
                 cur = state["current"]

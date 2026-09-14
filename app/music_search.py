@@ -2,11 +2,32 @@
 
 与播放后端无关（纯 HTTP），desktop/web 后端与前端搜索选择器共用。
 """
+import html
 import json
+import re
 import urllib.request
 
 SEARCH_URL = "https://u.y.qq.com/cgi-bin/musicu.fcg"
 DISS_TAG_URL = "https://c.y.qq.com/splcloud/fcgi-bin/fcg_get_diss_by_tag.fcg"
+TAG_CONF_URL = "https://c.y.qq.com/splcloud/fcgi-bin/fcg_get_diss_tag_conf.fcg"
+
+_HEADERS = {"Referer": "https://y.qq.com/", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+
+def _fetch_json(url: str) -> dict:
+    """GET JSON（c.y.qq.com 部分接口按 GBK 回包，自动兼容）。"""
+    req = urllib.request.Request(url, headers=_HEADERS)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        raw = resp.read()
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        return json.loads(raw.decode("gbk", errors="replace"))
+
+
+def _clean_text(s: str) -> str:
+    """去掉搜索高亮 <em> 标签并反转义 HTML 实体（如 R&#38;B → R&B）。"""
+    return html.unescape(re.sub(r"</?em>", "", s or "")).strip()
 
 
 def fcg_search(keyword: str, limit: int = 10) -> list:
@@ -263,6 +284,89 @@ def fcg_get_playlist_songs(dissid: str, limit: int = 30) -> list:
     return out
 
 
+# ---------------- 歌单广场：分类 / 分页浏览 / 歌单搜索 ----------------
+def fcg_get_playlist_categories() -> list:
+    """歌单分类分组：[{"group": "语种", "items": [{"id": 165, "name": "国语"}, ...]}, ...]"""
+    data = _fetch_json(f"{TAG_CONF_URL}?format=json")
+    groups = []
+    for g in data.get("data", {}).get("categories", []):
+        items = []
+        for it in g.get("items", []):
+            cid, name = it.get("categoryId"), _clean_text(it.get("categoryName", ""))
+            if cid and name:
+                items.append({"id": cid, "name": name})
+        if items:
+            groups.append({"group": g.get("categoryGroupName") or "推荐", "items": items})
+    return groups
+
+
+def fcg_get_playlists_by_category(category_id: int = 10000000, page: int = 1,
+                                  per_page: int = 20, sort_id: int = 5) -> dict:
+    """按分类分页取歌单：{"playlists": [...], "total": 总数}。sort_id: 5=最热 2=最新。"""
+    page = max(1, page)
+    # 该接口 ein 过小（<5）会返回空列表，per_page 至少 6
+    per_page = max(6, min(50, per_page))
+    sin = (page - 1) * per_page
+    url = (f"{DISS_TAG_URL}?sin={sin}&ein={sin + per_page - 1}"
+           f"&categoryId={category_id}&sortId={sort_id}&format=json")
+    data = _fetch_json(url).get("data", {})
+    out = []
+    for item in data.get("list", []):
+        diss_id = str(item.get("dissid") or "")
+        if not diss_id:
+            continue
+        out.append({
+            "dissid": diss_id,
+            "title": _clean_text(item.get("dissname") or "歌单"),
+            "cover": item.get("imgurl") or "",
+            "creator": item.get("creator", {}).get("name") or "",
+            "listennum": item.get("listennum") or 0,
+        })
+    return {"playlists": out, "total": data.get("sum") or 0}
+
+
+def fcg_search_playlists(keyword: str, page: int = 1, per_page: int = 20) -> dict:
+    """歌单搜索（官方桌面端搜索 RPC，search_type=3=歌单）。
+    上游不回总数，以「本页是否满载」推断 has_more。"""
+    kw = keyword.strip()
+    if not kw:
+        return {"playlists": [], "has_more": False}
+    per_page = max(1, min(50, per_page))
+    payload = {
+        "comm": {"ct": 19, "cv": 1859, "uin": 0},
+        "request": {
+            "method": "DoSearchForQQMusicDesktop",
+            "module": "music.search.SearchCgiService",
+            "param": {"search_type": 3, "query": kw,
+                      "page_num": max(1, page), "num_per_page": per_page},
+        },
+    }
+    req = urllib.request.Request(
+        SEARCH_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", **_HEADERS},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    songlist = data.get("request", {}).get("data", {}).get("body", {}).get("songlist", {})
+    out = []
+    for item in songlist.get("list", []):
+        diss_id = str(item.get("dissid") or item.get("docid") or "")
+        if not diss_id:
+            continue
+        out.append({
+            "dissid": diss_id,
+            "title": _clean_text(item.get("dissname") or "歌单"),
+            "cover": item.get("imgurl") or "",
+            "creator": item.get("creator", {}).get("name") or "",
+            "listennum": item.get("listennum") or 0,
+        })
+    return {"playlists": out, "has_more": len(out) >= per_page}
+
+
 # Aliases for convenience
 get_recommended_playlists = fcg_get_recommend_playlists
 get_playlist_songs = fcg_get_playlist_songs
+get_playlist_categories = fcg_get_playlist_categories
+get_playlists_by_category = fcg_get_playlists_by_category
+search_playlists = fcg_search_playlists

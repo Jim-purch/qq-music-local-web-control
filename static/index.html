@@ -79,13 +79,18 @@
         <div id="windowNotice" class="notice hidden"></div>
         <p class="kbd-hint">空格 播放/暂停 · N 下一首 · P 上一首 · / 跳到点歌</p>
 
-        <!-- QQ Music Recommendations -->
+        <!-- QQ Music 歌单广场 -->
         <div class="rec-section">
           <div class="rec-header">
-            <h2 class="sec-title" style="margin:0;">QQ音乐 推荐歌单</h2>
-            <button id="btnRefreshRec" class="mini-btn">刷新推荐</button>
+            <h2 class="sec-title" style="margin:0;">QQ音乐 歌单广场</h2>
+            <div class="rec-tools">
+              <input id="recSearchInput" class="rec-search-input" placeholder="搜索歌单，如：周杰伦 / 学习 / 助眠" autocomplete="off">
+              <button id="btnRefreshRec" class="mini-btn">刷新</button>
+            </div>
           </div>
+          <div id="recCats" class="rec-cats"></div>
           <div id="recGrid" class="rec-grid"></div>
+          <div class="rec-more-row"><button id="btnRecMore" class="mini-btn hidden">加载更多</button></div>
         </div>
       </section>
 
@@ -96,7 +101,7 @@
           <button class="btn-primary" type="submit">搜索</button>
           <button id="searchClearBtn" class="btn-ghost hidden" type="button">清空</button>
         </form>
-        <p class="hint">回车搜索，点一下加入共享队列（排在前面的先播）。想先收藏起来，去「歌单」页搜索添加。</p>
+        <p class="hint">回车搜索，「点播」加入共享队列（排在前面的先播），「+歌单」收藏进歌单。</p>
         <div id="searchMsg" class="msg"></div>
         <div id="searchResults"></div>
       </section>

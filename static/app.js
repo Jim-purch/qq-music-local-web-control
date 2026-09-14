@@ -519,6 +519,9 @@ function attachSearchResultsPicker(songs) {
       msg.className = 'msg err'; msg.textContent = err.message;
       saveSearchState();
     }
+  }, (s, btn) => {
+    const rect = btn.getBoundingClientRect();
+    showPlaylistPicker(rect.left, rect.bottom + 4, { title: s.title, singer: s.singer || '', songMid: s.songMid || '' });
   });
 }
 
@@ -527,7 +530,7 @@ async function searchSongs(kw) {
   return songs;
 }
 
-function renderPicker(box, songs, btnLabel, onPick) {
+function renderPicker(box, songs, btnLabel, onPick, onAddToPlaylist) {
   box.innerHTML = '';
   if (!songs.length) { box.innerHTML = '<div class="q-empty">没搜到，换个关键词试试。</div>'; return; }
   for (const s of songs) {
@@ -536,8 +539,15 @@ function renderPicker(box, songs, btnLabel, onPick) {
     row.innerHTML = `
       <div class="ps-title"><b>${esc(s.title)}</b><span>${esc(s.singer || '')}</span></div>
       <span class="q-adder"></span>
-      <button class="mini-btn">${esc(btnLabel)}</button>`;
-    row.querySelector('button').onclick = () => onPick(s);
+      <span class="ps-btns">
+        <button class="mini-btn pk-pick">${esc(btnLabel)}</button>
+        ${onAddToPlaylist ? '<button class="mini-btn pk-toPl" title="加入歌单">+歌单</button>' : ''}
+      </span>`;
+    row.querySelector('.pk-pick').onclick = () => onPick(s);
+    if (onAddToPlaylist) {
+      const b = row.querySelector('.pk-toPl');
+      b.onclick = (e) => { e.stopPropagation(); onAddToPlaylist(s, b); };
+    }
     box.appendChild(row);
   }
 }
@@ -941,27 +951,84 @@ $('#winForm').onsubmit = async (e) => {
 
 function showErr(e) { console.error(e); alert(e.message || e); }
 
-// ---------- QQ 音乐推荐歌单 ----------
-let recPlaylistsCache = [];
+// ---------- QQ 音乐歌单广场（分类浏览 + 歌单搜索 + 分页加载） ----------
+let recPlaylistsCache = [];   // 已加载的累积列表（卡片渲染与弹窗查找共用）
+const recState = { mode: 'square', category: 10000000, kw: '', page: 1, hasMore: true, loading: false };
+const REC_PAGE_SIZE = 20;
 
-async function loadRecPlaylists(force = false) {
-  const grid = $('#recGrid');
-  if (!grid) return;
-  if (!force && recPlaylistsCache.length) { renderRecGrid(); return; }
-  grid.innerHTML = '<div class="rec-loading">正在拉取 QQ 音乐推荐歌单…</div>';
+async function loadRecCategories() {
+  const box = $('#recCats');
+  if (!box) return;
   try {
-    const { playlists } = await api('/api/recommendations?limit=12');
-    recPlaylistsCache = playlists || [];
+    const { groups } = await api('/api/playlist_categories');
+    if (!groups || !groups.length) return;
+    box.innerHTML = groups.map(g =>
+      `<span class="rec-cat-group">${esc(g.group)}</span>` +
+      g.items.map(c => `<button class="rec-chip" data-cid="${c.id}">${esc(c.name)}</button>`).join('')
+    ).join('');
+    box.querySelectorAll('.rec-chip').forEach(chip => chip.onclick = () => {
+      recState.mode = 'square';
+      recState.category = Number(chip.dataset.cid);
+      const inp = $('#recSearchInput');
+      if (inp) inp.value = '';
+      reloadRecGrid();
+    });
+    markActiveChip();
+  } catch (e) { /* 分类拉取失败不阻塞歌单本体 */ }
+}
+
+function markActiveChip() {
+  document.querySelectorAll('#recCats .rec-chip').forEach(c =>
+    c.classList.toggle('active', recState.mode === 'square' && Number(c.dataset.cid) === recState.category));
+}
+
+async function reloadRecGrid() {
+  recState.page = 1;
+  recState.hasMore = true;
+  recPlaylistsCache = [];
+  const grid = $('#recGrid');
+  if (grid) grid.innerHTML = '<div class="rec-loading">正在拉取 QQ 音乐歌单…</div>';
+  await loadRecMore();
+}
+
+async function loadRecMore() {
+  const grid = $('#recGrid');
+  if (!grid || recState.loading || !recState.hasMore) return;
+  recState.loading = true;
+  updateRecMoreBtn();
+  try {
+    let data;
+    if (recState.mode === 'search') {
+      data = await api(`/api/playlist_search?kw=${encodeURIComponent(recState.kw)}&page=${recState.page}&per_page=${REC_PAGE_SIZE}`);
+      recState.hasMore = !!data.has_more;
+    } else {
+      data = await api(`/api/playlist_square?category=${recState.category}&page=${recState.page}&per_page=${REC_PAGE_SIZE}`);
+      recState.hasMore = recPlaylistsCache.length + (data.playlists || []).length < (data.total || 0);
+    }
+    recPlaylistsCache = recPlaylistsCache.concat(data.playlists || []);
+    recState.page += 1;
     renderRecGrid();
   } catch (e) {
-    grid.innerHTML = `<div class="rec-error">推荐歌单拉取失败：${esc(e.message)}</div>`;
+    recState.hasMore = false;
+    if (!recPlaylistsCache.length) grid.innerHTML = `<div class="rec-error">歌单拉取失败：${esc(e.message)}</div>`;
+  } finally {
+    recState.loading = false;
+    updateRecMoreBtn();
+    markActiveChip();
   }
+}
+
+function updateRecMoreBtn() {
+  const btn = $('#btnRecMore');
+  if (!btn) return;
+  btn.classList.toggle('hidden', !recState.hasMore);
+  btn.textContent = recState.loading ? '加载中…' : `加载更多（已显示 ${recPlaylistsCache.length} 个）`;
 }
 
 function renderRecGrid() {
   const grid = $('#recGrid');
   if (!grid) return;
-  if (!recPlaylistsCache.length) { grid.innerHTML = '<div class="rec-error">暂无推荐歌单。</div>'; return; }
+  if (!recPlaylistsCache.length) { grid.innerHTML = '<div class="rec-error">没有找到歌单，换个分类或关键词试试。</div>'; return; }
   grid.innerHTML = recPlaylistsCache.map(p => `
     <div class="rec-card" data-dissid="${esc(p.dissid)}" title="点击查看歌曲">
       <img class="rec-cover" src="${esc(p.cover)}" alt="" loading="lazy" referrerpolicy="no-referrer">
@@ -1006,7 +1073,7 @@ async function openRecModal(dissid) {
   mask.innerHTML = `
     <div class="modal-card">
       <div class="modal-head">
-        <h2>${esc(pl ? pl.title : '推荐歌单')}</h2>
+        <h2>${esc(pl ? pl.title : '歌单')}</h2>
         <span>
           <button class="mini-btn rec-play-modal">播放全部</button>
           <button class="mini-btn rec-enq-modal">加入队列</button>
@@ -1049,7 +1116,25 @@ async function openRecModal(dissid) {
 }
 
 const btnRefreshRec = $('#btnRefreshRec');
-if (btnRefreshRec) btnRefreshRec.onclick = () => loadRecPlaylists(true);
+if (btnRefreshRec) btnRefreshRec.onclick = () => reloadRecGrid();
+
+const btnRecMore = $('#btnRecMore');
+if (btnRecMore) btnRecMore.onclick = () => loadRecMore();
+
+const recSearchInput = $('#recSearchInput');
+if (recSearchInput) recSearchInput.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  const kw = recSearchInput.value.trim();
+  if (!kw) {
+    // 清空搜索词 → 回到当前分类广场
+    if (recState.mode !== 'square') { recState.mode = 'square'; reloadRecGrid(); }
+    return;
+  }
+  recState.mode = 'search';
+  recState.kw = kw;
+  reloadRecGrid();
+});
 
 // ---------- boot ----------
 (async () => {
@@ -1060,6 +1145,7 @@ if (btnRefreshRec) btnRefreshRec.onclick = () => loadRecPlaylists(true);
   loadVol();
   refreshPlayerStatus();
   setInterval(refreshPlayerStatus, 15000);
-  loadRecPlaylists();
+  loadRecCategories();
+  reloadRecGrid();
   try { applyState(await api('/api/state')); } catch {}
 })();

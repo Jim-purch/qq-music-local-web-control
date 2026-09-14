@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .player_select import player
-from . import core
+from . import core, keepalive
 from .db import get_db, init_db, rows_to_dicts
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
@@ -28,11 +28,13 @@ TOKEN_TTL = 365 * 24 * 3600
 async def lifespan(app: FastAPI):
     init_db()
     core.set_loop(asyncio.get_running_loop())
+    keepalive.start()  # 应用启动即保持蓝牙链路，等播放时由 poller 自动停止
     asyncio.create_task(core.poll_now_playing())
     loop = asyncio.get_event_loop()  # window checker in a thread
     import threading
     threading.Thread(target=core.window_loop, daemon=True).start()
     yield
+    keepalive.stop()
     await player.stop()
 
 
@@ -230,6 +232,41 @@ async def play_recommendation(diss_id: str, request: Request, limit: int = 20, f
     return core.snapshot()
 
 
+# ---------------- 歌单广场（分类浏览 + 分页 + 歌单搜索） ----------------
+_cat_cache = {"groups": [], "at": 0.0}
+
+
+@app.get("/api/playlist_categories")
+async def playlist_categories():
+    """歌单分类分组（缓存 1 小时，分类几乎不变）。"""
+    from .music_search import get_playlist_categories
+    global _cat_cache
+    now = time.time()
+    if _cat_cache["groups"] and now - _cat_cache["at"] < 3600:
+        return {"groups": _cat_cache["groups"]}
+    groups = await asyncio.to_thread(get_playlist_categories)
+    if groups:
+        _cat_cache = {"groups": groups, "at": now}
+    return {"groups": groups or _cat_cache["groups"]}
+
+
+@app.get("/api/playlist_square")
+async def playlist_square(category: int = 10000000, page: int = 1, per_page: int = 20, sort: int = 5):
+    """按分类分页浏览歌单：{"playlists": [...], "total": 总数}。"""
+    from .music_search import get_playlists_by_category
+    return await asyncio.to_thread(get_playlists_by_category, category, page, per_page, sort)
+
+
+@app.get("/api/playlist_search")
+async def playlist_search_ep(kw: str, page: int = 1, per_page: int = 20):
+    """搜索歌单：{"playlists": [...], "has_more": bool}。"""
+    kw = kw.strip()
+    if not kw:
+        raise HTTPException(400, "缺少关键词")
+    from .music_search import search_playlists
+    return await asyncio.to_thread(search_playlists, kw, page, per_page)
+
+
 # ---------------- jukebox state & queue ----------------
 @app.get("/api/state")
 def get_state():
@@ -291,10 +328,14 @@ def get_volume():
     return {"volume": player.get_system_volume()}
 
 
+class VolumeBody(BaseModel):
+    volume: int
+
+
 @app.post("/api/volume")
-def set_volume(request: Request, volume: int):
+def set_volume(body: VolumeBody, request: Request):
     require_user(request)
-    return {"volume": player.set_system_volume(volume)}
+    return {"volume": player.set_system_volume(body.volume)}
 
 
 # ---------------- playlists ----------------
