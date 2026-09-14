@@ -4,6 +4,7 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 let me = null;
 let queue = [];
 let searchCachedSongs = [];
+let npAddSong = null;  // 当前正在播放、可收藏进歌单的歌曲
 
 const AUTH_TOKEN_KEY = 'juke_token';
 const AUTH_USER_KEY = 'juke_user';
@@ -190,6 +191,12 @@ function applyState(s) {
   $('#btnPlay').textContent = s.paused ? '▶' : '❚❚';
   $('#windowNotice').classList.toggle('hidden', s.allowPlay);
   if (!s.allowPlay) $('#windowNotice').textContent = '现在不在允许播放的时段，到点会自动继续。';
+  // 「正在播放 → 加入歌单」按钮状态：切歌瞬间 shown 还是旧歌，先禁用避免收错
+  npAddSong = shown ? { title: shown.title, singer: shown.singer || '', songMid: shown.songMid || '' } : null;
+  const canAdd = !!npAddSong && !isSwitching;
+  const btnNpAdd = $('#btnNpAdd'), btnQNpAdd = $('#btnQNpAdd');
+  if (btnNpAdd) btnNpAdd.disabled = !canAdd;
+  if (btnQNpAdd) btnQNpAdd.disabled = !canAdd;
   // 进度与时长元数据（来自 SMTC / 网页 audio）
   syncNpTick(np);
   paintNpProgress();
@@ -435,14 +442,34 @@ const btnQueueNext = $('#btnQueueNext');
 if (btnQueueNext) btnQueueNext.onclick = triggerNextSong;
 
 const volSlider = $('#volSlider');
+function renderVol(v) { volSlider.value = v; $('#volNum').textContent = v; }
 async function loadVol() {
   try {
     const { volume } = await api('/api/volume');
-    if (volume >= 0) { volSlider.value = volume; $('#volNum').textContent = volume; }
+    if (volume >= 0) renderVol(volume);
   } catch {}
 }
+function setVol(v) {
+  v = Math.max(0, Math.min(100, Math.round(v)));
+  renderVol(v);
+  api('/api/volume', { method: 'POST', body: { volume: v } }).catch(showErr);
+}
 volSlider.oninput = () => { $('#volNum').textContent = volSlider.value; };
-volSlider.onchange = () => api('/api/volume', { method: 'POST', body: { volume: +volSlider.value } }).catch(showErr);
+volSlider.onchange = () => setVol(+volSlider.value);
+$('#volDown').onclick = () => setVol(+volSlider.value - 1);
+$('#volUp').onclick = () => setVol(+volSlider.value + 1);
+
+// 正在播放 → 加入歌单（主卡与队列小卡共用歌单选择浮层）
+function bindNpAddBtn(sel) {
+  const b = $(sel);
+  if (b) b.onclick = () => {
+    if (!npAddSong) return;
+    const r = b.getBoundingClientRect();
+    showPlaylistPicker(r.left, r.bottom + 4, npAddSong);
+  };
+}
+bindNpAddBtn('#btnNpAdd');
+bindNpAddBtn('#btnQNpAdd');
 
 // ---------- search（点歌页 / 歌单页共用的「搜索 → 点选」选择器） ----------
 const SEARCH_CACHE_KEY = 'juke_search_state';

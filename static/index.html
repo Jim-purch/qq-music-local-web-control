@@ -64,6 +64,7 @@
               </div>
             </div>
             <div class="np-by" id="npBy"></div>
+            <button id="btnNpAdd" class="mini-btn np-add-btn" title="把当前歌曲加入歌单" disabled>+ 歌单</button>
           </div>
         </div>
         <div class="controls">
@@ -72,7 +73,9 @@
           <button id="btnNext" class="ctl" title="切歌（N）">⏭</button>
           <div class="vol">
             <span class="vol-label">音量</span>
+            <button id="volDown" class="vol-btn" title="音量减 1">−</button>
             <input id="volSlider" type="range" min="0" max="100" value="50">
+            <button id="volUp" class="vol-btn" title="音量加 1">+</button>
             <span id="volNum" class="vol-num">50</span>
           </div>
         </div>
@@ -189,7 +192,10 @@
       <div id="queueNowPlaying" class="q-np-card">
         <div class="q-np-header">
           <span class="q-np-tag">正在播放</span>
-          <button id="btnQueueNext" class="mini-btn q-np-next-btn" title="切到下一首">下一首 ⏭</button>
+          <div class="q-np-actions">
+            <button id="btnQNpAdd" class="mini-btn" title="把当前歌曲加入歌单" disabled>+歌单</button>
+            <button id="btnQueueNext" class="mini-btn q-np-next-btn" title="切到下一首">下一首 ⏭</button>
+          </div>
         </div>
         <div class="q-np-body">
           <div class="q-np-title" id="qNpTitle">队列空空的</div>

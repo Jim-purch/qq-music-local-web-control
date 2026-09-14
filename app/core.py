@@ -241,6 +241,27 @@ async def prev_song(user=None):
 # ---------------- now-playing poller: detects natural song end ----------------
 _last_seen_title = ""
 _mismatch_polls = 0
+_tracked_cur_started = None  # 已跟踪的 current.startedAt（换歌时重置进度基线）
+_last_pos = -1               # 上一轮 current 的播放进度（秒）；-1=无记录
+_restart_suspect = False     # 上一轮疑似同名重播（进度回退到开头）
+
+# 提前切换提前量（秒）：从触发切歌到客户端真正换曲需要 fcg 搜索 + UIA 自动操作，
+# 合计约 4~12 秒。旧歌进入最后这段时间就提前铺开下一首的搜索播放，
+# 客户端无缝接上新歌——没有暂停空档，也不会漏播客户端内部列表的歌。
+# 副作用：旧歌的最后几秒会被新歌覆盖（相当于提前几秒切歌）。短于提前量的歌不适用。
+SWITCH_LEAD_SEC = 10
+
+
+async def _pause_client_after_end():
+    """自然播完立刻暂停客户端：阻止 QQ 音乐按内部列表自动连播。
+    队列里下一首搜出来后由 search_and_play 的「播放全部」点击自行恢复播放；
+    队列空则保持暂停（keepalive 静音流保住蓝牙链路）。"""
+    try:
+        await player.control("pause")
+        state["paused"] = True
+        broadcast("play:paused", {"paused": True})
+    except Exception as e:
+        print("[poll] 播完后暂停客户端失败:", e)
 
 
 def _update_keepalive(np):
@@ -260,14 +281,17 @@ def _update_keepalive(np):
 
 
 async def poll_now_playing():
-    """轮询 SMTC 正在播放，检测自然切歌。
+    """轮询 SMTC 正在播放，驱动切歌。
 
-    判定「当前歌已结束」：
-    - 快速路径：先见过 current 的标题（_last_seen_title == cur.title），之后标题变了；
-    - 兜底路径：标题连续 3 次轮询（约 9 秒）都不是 current——覆盖「不可播曲目被客户端
-      瞬间跳过」的场景（那种歌永远不会被 _last_seen_title 记到，不兜底队列会永久卡死）。
+    - 提前切换（主路径）：队列有下一首时，旧歌进入最后 SWITCH_LEAD_SEC 秒就
+      finish_current + kick，把 fcg 搜索 + UIA 自动操作的耗时铺进旧歌尾巴，
+      客户端无缝换曲（不暂停）。
+    - 标题变化（兜底）：客户端已自己跳歌（队列空时播完连播、不可播曲目被跳过）→
+      先暂停客户端刹住内部列表，再 finish_current。
+    - 同名重播（兜底）：标题没变但进度从 >30s 回退到 <10s——单曲循环播完重播、
+      或客户端跳到同名另一版本（如试听版→完整版），标题不变，连播检测抓不到。
     """
-    global _last_seen_title, _mismatch_polls
+    global _last_seen_title, _mismatch_polls, _tracked_cur_started, _last_pos, _restart_suspect
     while True:
         try:
             np = await player.now_playing()
@@ -276,13 +300,38 @@ async def poll_now_playing():
             if np:
                 key = np["title"]
                 cur = state["current"]
+                # 换歌了：重置进度基线，避免拿上一首的进度误判新歌「回退」
+                if cur and cur.get("startedAt") != _tracked_cur_started:
+                    _tracked_cur_started = cur.get("startedAt")
+                    _last_pos = -1
+                    _restart_suspect = False
                 if cur and key and key != cur["title"]:
                     _mismatch_polls += 1
                     if _last_seen_title == cur["title"] or _mismatch_polls >= 3:
+                        await _pause_client_after_end()  # 先刹住客户端内部列表的自动连播
                         await finish_current()  # player bar moved on by itself
                         _mismatch_polls = 0
                 else:
                     _mismatch_polls = 0
+                    pos = np.get("positionSec") or 0
+                    if cur and key == cur["title"]:
+                        dur = np.get("durationSec") or 0
+                        # 提前切换：旧歌只剩 lead 秒且队列有下一首 → 立即进入切歌流程。
+                        # 不暂停客户端：旧歌把尾巴放完，「播放全部」点击时客户端直接换曲。
+                        if (np.get("playing") is True and dur > SWITCH_LEAD_SEC
+                                and state["queue"] and not state["switching"]
+                                and 0 < dur - pos <= SWITCH_LEAD_SEC):
+                            await finish_current()
+                        elif _last_pos > 30 and pos < 10:
+                            _restart_suspect = True
+                        elif _restart_suspect:
+                            # 上一轮疑似重播，本轮同名仍在播：确认重播，按播完处理
+                            _restart_suspect = False
+                            await _pause_client_after_end()
+                            await finish_current()
+                        else:
+                            _restart_suspect = False
+                        _last_pos = pos
                 _last_seen_title = key
                 broadcast("nowplaying", np)
         except Exception as e:
