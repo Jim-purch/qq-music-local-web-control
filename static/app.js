@@ -509,20 +509,30 @@ function restoreSearchState() {
 }
 
 function attachSearchResultsPicker(songs) {
-  renderPicker($('#searchResults'), songs, '点播', async (s) => {
-    const msg = $('#searchMsg');
-    try {
-      await api('/api/queue/add', { method: 'POST', body: { title: s.title, singer: s.singer, songMid: s.songMid } });
-      msg.className = 'msg ok'; msg.textContent = `「${s.title}」已加入共享队列`;
-      saveSearchState();
-    } catch (err) {
-      msg.className = 'msg err'; msg.textContent = err.message;
-      saveSearchState();
+  renderPicker($('#searchResults'), songs, [
+    {
+      label: '点播',
+      onPick: async (s) => {
+        const msg = $('#searchMsg');
+        try {
+          await api('/api/queue/add', { method: 'POST', body: { title: s.title, singer: s.singer, songMid: s.songMid } });
+          msg.className = 'msg ok'; msg.textContent = `「${s.title}」已加入共享队列`;
+          saveSearchState();
+        } catch (err) {
+          msg.className = 'msg err'; msg.textContent = err.message;
+          saveSearchState();
+        }
+      }
+    },
+    {
+      label: '+歌单',
+      title: '加入歌单',
+      onPick: (s, btn) => {
+        const rect = btn.getBoundingClientRect();
+        showPlaylistPicker(rect.left, rect.bottom + 4, { title: s.title, singer: s.singer || '', songMid: s.songMid || '' });
+      }
     }
-  }, (s, btn) => {
-    const rect = btn.getBoundingClientRect();
-    showPlaylistPicker(rect.left, rect.bottom + 4, { title: s.title, singer: s.singer || '', songMid: s.songMid || '' });
-  });
+  ]);
 }
 
 async function searchSongs(kw) {
@@ -530,7 +540,7 @@ async function searchSongs(kw) {
   return songs;
 }
 
-function renderPicker(box, songs, btnLabel, onPick, onAddToPlaylist) {
+function renderPicker(box, songs, actions) {
   box.innerHTML = '';
   if (!songs.length) { box.innerHTML = '<div class="q-empty">没搜到，换个关键词试试。</div>'; return; }
   for (const s of songs) {
@@ -540,14 +550,11 @@ function renderPicker(box, songs, btnLabel, onPick, onAddToPlaylist) {
       <div class="ps-title"><b>${esc(s.title)}</b><span>${esc(s.singer || '')}</span></div>
       <span class="q-adder"></span>
       <span class="ps-btns">
-        <button class="mini-btn pk-pick">${esc(btnLabel)}</button>
-        ${onAddToPlaylist ? '<button class="mini-btn pk-toPl" title="加入歌单">+歌单</button>' : ''}
+        ${actions.map((a, i) => `<button class="mini-btn" data-ai="${i}"${a.title ? ` title="${esc(a.title)}"` : ''}>${esc(a.label)}</button>`).join('')}
       </span>`;
-    row.querySelector('.pk-pick').onclick = () => onPick(s);
-    if (onAddToPlaylist) {
-      const b = row.querySelector('.pk-toPl');
-      b.onclick = (e) => { e.stopPropagation(); onAddToPlaylist(s, b); };
-    }
+    row.querySelectorAll('.ps-btns button').forEach(b => {
+      b.onclick = (e) => { e.stopPropagation(); actions[+b.dataset.ai].onPick(s, b); };
+    });
     box.appendChild(row);
   }
 }
@@ -680,14 +687,30 @@ async function openPlaylist(id, name) {
     if (!raw) return;
     try {
       const songs = await searchSongs(raw);
-      renderPicker($('#plPick'), songs, '加入歌单', async (s) => {
-        try {
-          await api(`/api/playlists/${id}/songs`, { method: 'POST', body: { title: s.title, singer: s.singer, songMid: s.songMid } });
-          $('#plPick').innerHTML = '';
-          $('#plSongInput').value = '';
-          openPlaylist(id, name);
-        } catch (e) { showErr(e); }
-      });
+      renderPicker($('#plPick'), songs, [
+        {
+          label: '加入歌单',
+          onPick: async (s) => {
+            try {
+              await api(`/api/playlists/${id}/songs`, { method: 'POST', body: { title: s.title, singer: s.singer, songMid: s.songMid } });
+              $('#plPick').innerHTML = '';
+              $('#plSongInput').value = '';
+              openPlaylist(id, name);
+            } catch (e) { showErr(e); }
+          }
+        },
+        {
+          label: '+队列',
+          title: '加入播放队列',
+          onPick: async (s, btn) => {
+            try {
+              await api('/api/queue/add', { method: 'POST', body: { title: s.title, singer: s.singer, songMid: s.songMid } });
+              btn.textContent = '已入队';
+              setTimeout(() => { btn.textContent = '+队列'; }, 1500);
+            } catch (e) { showErr(e); }
+          }
+        }
+      ]);
     } catch (e) { showErr(e); }
   };
   const box = $('#plSongs');
@@ -1094,7 +1117,7 @@ async function openRecModal(dissid) {
       <div class="modal-song">
         <span class="ps-idx">${i + 1}</span>
         <div class="ps-title"><b>${esc(s.title)}</b><span>${esc(s.singer || '')}</span></div>
-        <button class="mini-btn modal-enq-one" data-i="${i}">点播</button>
+        <button class="mini-btn modal-enq-one" data-i="${i}" title="加入播放队列">+队列</button>
         <button class="mini-btn modal-toPl-one" data-i="${i}">+歌单</button>
       </div>`).join('') : '<div class="rec-error">这首歌单暂时拉不到歌曲。</div>';
     box.querySelectorAll('.modal-enq-one').forEach(b => b.onclick = async () => {
@@ -1102,7 +1125,7 @@ async function openRecModal(dissid) {
       try {
         await api('/api/queue/add', { method: 'POST', body: { title: s.title, singer: s.singer, songMid: s.songMid } });
         b.textContent = '已入队';
-        setTimeout(() => { b.textContent = '点播'; }, 1500);
+        setTimeout(() => { b.textContent = '+队列'; }, 1500);
       } catch (e) { showErr(e); }
     });
     box.querySelectorAll('.modal-toPl-one').forEach(b => b.onclick = () => {
