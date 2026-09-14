@@ -20,3 +20,9 @@ Thumbs.db
 # local temp / runtime artifacts
 jukebox.db
 q.json
+
+# one-off debug / test scripts
+scripts/check_*.py
+scripts/try_add_rule.py
+scripts/extract_strings.py
+scripts/cleanup.py
