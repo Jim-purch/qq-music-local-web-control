@@ -40,6 +40,36 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="客厅点唱机", lifespan=lifespan)
 
+# CORS 与局域网安全策略
+from fastapi.middleware.cors import CORSMiddleware
+
+_allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "").strip()
+_cors_origins = [o.strip() for o in _allowed_origins_env.split(",") if o.strip()] if _allowed_origins_env else ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True if _cors_origins != ["*"] else False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    try:
+        response = await call_next(request)
+    except HTTPException:
+        raise
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"detail": "服务器内部错误，请稍后重试"}, status_code=500)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 
 # ---------------- session helpers ----------------
 def parse_cookies(request: Request) -> dict:
@@ -132,7 +162,7 @@ def register(body: RegisterBody, response: JSONResponse):
     conn.commit()
     user_info = {"id": row["id"], "name": row["name"]}
     SESSIONS[token] = user_info
-    response.set_cookie("juke_uid", token, max_age=TOKEN_TTL, samesite="lax")
+    response.set_cookie("juke_uid", token, max_age=TOKEN_TTL, samesite="lax", httponly=True)
     return {"user": user_info, "token": token}
 
 

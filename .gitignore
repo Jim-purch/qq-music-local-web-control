@@ -6,11 +6,26 @@ venv/
 
 # local data — sqlite db, Chrome profile (QQ music login cookies) — NEVER commit
 data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+jukebox.db
+
+# tokens, credentials & secrets
+*.token
+*.key
+*.pem
+tok.txt
+.env
+.env.*
 
 # logs & os junk
 *.log
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # editor
 .vscode/
