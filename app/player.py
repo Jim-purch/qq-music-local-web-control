@@ -262,10 +262,14 @@ async def stop():
 # Windows: pycaw (Core Audio). macOS: osascript. Added lazily so missing
 # optional deps don't break other features.
 def _win_volume():
+    from pycaw.pycaw import AudioUtilities
+    devices = AudioUtilities.GetSpeakers()
+    # pycaw >= 2025: AudioDevice.EndpointVolume 属性；旧版走 COM Activate
+    if hasattr(devices, "EndpointVolume"):
+        return devices.EndpointVolume
     from ctypes import cast, POINTER
     from comtypes import CLSCTX_ALL
-    from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-    devices = AudioUtilities.GetSpeakers()
+    from pycaw.pycaw import IAudioEndpointVolume
     interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     return cast(interface, POINTER(IAudioEndpointVolume))
 

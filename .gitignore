@@ -15,3 +15,8 @@ Thumbs.db
 # editor
 .vscode/
 .idea/
+.zcode/
+
+# local temp / runtime artifacts
+jukebox.db
+q.json

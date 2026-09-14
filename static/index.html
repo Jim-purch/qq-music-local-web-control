@@ -22,6 +22,12 @@
   </div>
 </div>
 
+<!-- 全局切歌 / 播放加载提示横幅 -->
+<div id="switchingBanner" class="switching-banner hidden">
+  <span class="spin-ico">⟳</span>
+  <span id="switchingText">正在切歌，已向客户端发送指令，请稍候…</span>
+</div>
+
 <div class="shell">
   <aside class="side">
     <div class="brand"><span class="brand-dot"></span>点唱机</div>
@@ -48,6 +54,15 @@
             <div class="np-label" id="npState">待命中</div>
             <div class="np-title" id="npTitle">队列空空的</div>
             <div class="np-singer" id="npSinger"></div>
+            <div class="np-progress-wrap" id="npProgressWrap">
+              <div class="np-progress-bar">
+                <div class="np-progress-fill" id="npProgressFill" style="width: 0%"></div>
+              </div>
+              <div class="np-times">
+                <span id="npCurTime">00:00</span>
+                <span id="npTotalTime">00:00</span>
+              </div>
+            </div>
             <div class="np-by" id="npBy"></div>
           </div>
         </div>
@@ -63,30 +78,50 @@
         </div>
         <div id="windowNotice" class="notice hidden"></div>
         <p class="kbd-hint">空格 播放/暂停 · N 下一首 · P 上一首 · / 跳到点歌</p>
+
+        <!-- QQ Music Recommendations -->
+        <div class="rec-section">
+          <div class="rec-header">
+            <h2 class="sec-title" style="margin:0;">QQ音乐 推荐歌单</h2>
+            <button id="btnRefreshRec" class="mini-btn">刷新推荐</button>
+          </div>
+          <div id="recGrid" class="rec-grid"></div>
+        </div>
       </section>
 
       <!-- SEARCH -->
       <section id="tab-search" class="tab">
         <form id="searchForm" class="search-form">
           <input id="searchInput" placeholder="歌名、歌手，随口说" autocomplete="off">
-          <button class="btn-primary" type="submit">点这首歌</button>
+          <button class="btn-primary" type="submit">搜索</button>
+          <button id="searchClearBtn" class="btn-ghost hidden" type="button">清空</button>
         </form>
-        <p class="hint">回车即加入队列并播放。想先收进歌单，去「歌单」页添加。</p>
+        <p class="hint">回车搜索，点一下加入共享队列（排在前面的先播）。想先收藏起来，去「歌单」页搜索添加。</p>
         <div id="searchMsg" class="msg"></div>
+        <div id="searchResults"></div>
       </section>
 
       <!-- PLAYLISTS -->
       <section id="tab-playlists" class="tab">
-        <form id="plForm" class="pl-form">
-          <input id="plName" placeholder="新歌单名称" maxlength="40">
-          <button class="btn-primary" type="submit">建歌单</button>
-        </form>
+        <div class="pl-topbar">
+          <form id="plForm" class="pl-form" style="margin-bottom:0; flex:1;">
+            <input id="plName" placeholder="新歌单名称" maxlength="40">
+            <button class="btn-primary" type="submit">建歌单</button>
+          </form>
+          <div class="pl-io-btns">
+            <button id="btnImportPl" class="mini-btn">导入歌单 (JSON)</button>
+            <input type="file" id="plFileInput" accept=".json,application/json" style="display:none;">
+          </div>
+        </div>
         <div id="plList" class="pl-list"></div>
         <div id="plDetail" class="pl-detail hidden"></div>
       </section>
 
       <!-- STATS -->
       <section id="tab-stats" class="tab">
+        <div class="stat-search-bar">
+          <input id="statSearchInput" placeholder="在最常放与放过的歌中快速搜索…" maxlength="50">
+        </div>
         <div class="stat-period">
           <button data-p="day" class="chip active">今天</button>
           <button data-p="week" class="chip">本周</button>
@@ -145,7 +180,19 @@
 
     <!-- persistent right column: queue -->
     <aside class="queue-col">
-      <h2 class="sec-title">接下来</h2>
+      <!-- 队列顶部的正在播放卡片 -->
+      <div id="queueNowPlaying" class="q-np-card">
+        <div class="q-np-header">
+          <span class="q-np-tag">正在播放</span>
+          <button id="btnQueueNext" class="mini-btn q-np-next-btn" title="切到下一首">下一首 ⏭</button>
+        </div>
+        <div class="q-np-body">
+          <div class="q-np-title" id="qNpTitle">队列空空的</div>
+          <div class="q-np-singer" id="qNpSinger"></div>
+          <div class="q-np-time" id="qNpTime">00:00 / 00:00</div>
+        </div>
+      </div>
+      <h2 class="sec-title" style="margin-top: 14px;">接下来</h2>
       <ol id="queueList" class="queue"></ol>
     </aside>
   </main>

@@ -1,6 +1,8 @@
 # 桌面客户端控制方案调研 · QQ 音乐 Windows 版
 
 > 调研日期：2026-09。目标：把播放内核从「Playwright 驱动 y.qq.com 网页版」换成「局域网网页控制本机 QQ 音乐桌面客户端」，部署形态不变——一台蓝牙连办公室音箱的 Windows 电脑当服务器，同事用局域网网页点歌。
+>
+> **✅ 2026-09-08 已实施落地**（实测结论见文末「PoC 实测结果」），代码：`app/player_desktop.py`，`JUKEBOX_BACKEND=desktop` 默认启用（Windows）。
 
 ## 结论
 
@@ -10,7 +12,7 @@
 |---|---|---|
 | 播放/暂停/上一首/下一首 | Windows SMTC 系统媒体会话 | 高（系统级 API，有官方文档，不碰客户端 UI，无需前台窗口） |
 | 正在播放（歌名/歌手/进度/状态） | 同上 SMTC 媒体属性 | 高 |
-| 点歌（搜索 → 播指定歌曲） | 搜索接口拿 `songMid` → `qqmusic://` 深链唤起客户端 | **中，唯一待实测点**：深链在移动端已验证，PC 客户端注册了 `qqmusic://` 协议，但 `playSonglist` 是否直接起播无文档保证 |
+| 点歌（搜索 → 播指定歌曲） | fcg 搜索拿元数据 → UIA 驱动客户端搜索框 + PostMessage 双击结果行 | 中（依赖客户端 UI 结构，但控件名稳定且有 UIA 名称） |
 | 音量 | 现有 pycaw（系统主音量，蓝牙音箱走默认输出设备） | 高，代码已有 |
 | 登录/VIP | 客户端自行登录一次，长期有效 | 高，不再自己管 cookie |
 
@@ -129,5 +131,34 @@ python scripts/win_desktop_poc.py control next
 - [GSMTC 官方文档 (Microsoft Learn)](https://learn.microsoft.com/en-us/uwp/api/windows.media.control.globalsystemmediatransportcontrolssessionmanager)
 - [Python 读取 SMTC 示例 (Stack Overflow)](https://stackoverflow.com/questions/65011660/how-can-i-get-the-title-of-the-currently-playing-media-in-windows-10-with-python)
 - [WindowsMediaController（SMTC 封装库）](https://github.com/DubyaDude/WindowsMediaController) · [SMTC 应用支持列表](https://github.com/ModernFlyouts-Community/ModernFlyouts/blob/main/docs/GSMTC-Support-And-Popular-Apps.md)
-- [URL Scheme 汇总（含 playSonglist 格式）](https://gist.github.com/zhuziyi1989/3f96a73c45a87778b560e44cb551ebd2) · [博客园示例](https://www.cnblogs.com/xiao1993/p/18489299)
+- [URL Scheme 汇总（含 playSonglist 格式）](https://gist.github.com/zhuziyi1989/3f96a73c45a87778e44cb551ebd2) · [博客园示例](https://www.cnblogs.com/xiao1993/p/18489299)
 - [QQ音乐移动 WEB 开放平台](https://y.qq.com/m/api/open/index.html) · [QQ音乐开发者平台](https://developer.y.qq.com/)
+
+## PoC 实测结果（2026-09-08，QQ 音乐 22.61，Windows 11）
+
+按上表预想跑完三步 PoC，**两条预想通道死亡、一条意外通道死亡，最终用备选通道落地**：
+
+| 通道 | 结果 | 原因 |
+|---|---|---|
+| SMTC 读取/控制 | ✅ 完全可用 | 播放中有 `QQMusic.exe` 会话；pause/play/next/prev 全生效（next/prev 对单曲队列表现为重播，多曲队列正常切歌）。注意：**没有任何播放时 get_sessions() 为空**，属正常 |
+| fcg 搜索 | ✅ 完全可用 | `DoSearchForQQMusicDesktop` 无需登录，songmid 与付费标记（`pay.pay_play`）都能拿到 |
+| `qqmusic://` 深链 | ❌ 死亡 | 本机协议未注册（`HKCR\qqmusic` 不存在），`os.startfile` 直接弹「选择打开方式」；手工注册到 `QQMusic.exe --args="%1"` 后也只是唤起窗口不播放（`playSonglist` 对 PC 客户端 22.61 无效） |
+| QQMusicSvr COM SDK | ❌ 死亡（一半） | 注册表有完整的官方 COM 注册（`QQMusicSvr.QQMusicPlayer` 等 5 个类，LocalServer32 → `QQMusicSvr.exe`，含 IQQPlayer/IQQControl/IQLyric 及事件连接点）。实测：Svr 需 `-Embedding` 预启动才存活；COM 激活后 `Play/Pause/PlayNext/GetPlaySongInfo` 全部返回 S_OK **但零效果**，`AddSong` 任何参数格式（字符串/数组/嵌套）都静默失败——客户端侧的 `csQQMusicComApiWnd2017` 窗口（WM_COPYDATA 接收端）虽存在但已不理睬这代协议。结论：**官方 COM 桥在 22.61 已实质废弃** |
+| 本地 HTTPS 端口 5283 (sctun) | ❌ 放弃 | 客户端内部隧道（证书 `ql.njmapp.com`），无文档的私有协议，投入产出比太低 |
+| **UIA + PostMessage（最终方案）** | ✅ 落地 | 客户端 TXGuiFoundation 自绘 UI 的 **UIAutomation 树完整可靠**（搜索框是唯一 Edit；结果行的歌名是 Hyperlink、歌手是「歌手：xxx」链接，坐标可精确定位）。输入有三坑，见下 |
+
+### UIA 通道的三个关键坑（已绕过，改动在 `app/player_desktop.py`）
+
+1. **窗口标题随播放歌曲变化**（空播时「QQ音乐」，播放中「搁浅 - 周杰伦」）——不能按标题找窗口，按「QQMusic.exe 进程 + 面积最大的窗口」找。
+2. **SendInput 键盘进不去后台窗口**：`element.set_focus()` 是 UIA 合成焦点，`send_keys` 的 SendInput 键进的是真实前台窗口——文字全丢。**必须 PostMessage**：`WM_CHAR` 逐字 + `WM_KEYDOWN(VK_RETURN)` 提交。
+3. **自绘输入框不认 Ctrl+A 和 WM_CHAR(8)**：清空旧关键词要用 `WM_KEYDOWN(VK_BACK)` × N，Ctrl+A 是无效的。
+
+双击结果行同样走 PostMessage（`WM_LBUTTONDOWN/UP/DBLCLK/UP` 四连发，ScreenToClient 换算），全程**不移动真实光标、不抢前台**——部署机有人在用也不受影响。
+
+### 实施落点
+
+- `app/player_desktop.py`：桌面后端，与 `app/player.py`（网页版）接口完全一致
+- `app/player_select.py`：后端切换。环境变量 `JUKEBOX_BACKEND=web` 强制网页版；默认 Windows 自动用桌面客户端版
+- 依赖（requirements.txt 已加）：`pywinauto`、`winrt-runtime`、`winrt-Windows.Foundation[.Collections]`、`winrt-Windows.Media.Control`（均仅 win32）
+- 注意：Python 3.14 上老 `winsdk` 编译不过，必须用 `winrt-*` 新包（导入路径 `winrt.windows.media.control`）
+- comtypes 若要用 QQMusicSvr 类型库生成代码，中文系统需把 `comtypes/tools/codegenerator/codegenerator.py` 里硬编码的 `coding: mbcs` 补丁成 utf-8（venv 内已改，仅供后续逆向参考）

@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 import socket
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -12,12 +13,13 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import player, core
+from .player_select import player
+from . import core
 from .db import get_db, init_db, rows_to_dicts
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
 
-# sessions in-memory; cookie token -> {"id", "name"}
+# sessions in-memory cache; cookie/header token -> {"id", "name"}
 SESSIONS = {}
 TOKEN_TTL = 365 * 24 * 3600
 
@@ -48,9 +50,47 @@ def parse_cookies(request: Request) -> dict:
     return out
 
 
+def get_token_from_request(request: Request) -> Optional[str]:
+    # 1. Header: Authorization: Bearer <token>
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        t = auth_header[7:].strip()
+        if t:
+            return t
+    # 2. Header: X-Juke-Token: <token>
+    custom_header = request.headers.get("x-juke-token", "").strip()
+    if custom_header:
+        return custom_header
+    # 3. Cookie: juke_uid=<token>
+    cookie_token = parse_cookies(request).get("juke_uid", "").strip()
+    if cookie_token:
+        return cookie_token
+    return None
+
+
 def current_user(request: Request) -> Optional[dict]:
-    token = parse_cookies(request).get("juke_uid")
-    return SESSIONS.get(token)
+    token = get_token_from_request(request)
+    if not token:
+        return None
+    if token in SESSIONS:
+        return SESSIONS[token]
+    # Check DB session
+    conn = get_db()
+    now = int(time.time())
+    row = conn.execute(
+        "SELECT u.id, u.name, s.expires_at FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ?",
+        (token,),
+    ).fetchone()
+    if row:
+        if row["expires_at"] > now:
+            user_data = {"id": row["id"], "name": row["name"]}
+            SESSIONS[token] = user_data
+            return user_data
+        else:
+            # expired, clean up
+            conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            conn.commit()
+    return None
 
 
 def require_user(request: Request) -> dict:
@@ -81,9 +121,17 @@ def register(body: RegisterBody, response: JSONResponse):
     elif row["pin"] and row["pin"] != pin:
         raise HTTPException(403, "这个昵称已被使用，需要口令")
     token = secrets.token_hex(24)
-    SESSIONS[token] = {"id": row["id"], "name": row["name"]}
+    now = int(time.time())
+    expires_at = now + TOKEN_TTL
+    conn.execute(
+        "INSERT OR REPLACE INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)",
+        (token, row["id"], expires_at),
+    )
+    conn.commit()
+    user_info = {"id": row["id"], "name": row["name"]}
+    SESSIONS[token] = user_info
     response.set_cookie("juke_uid", token, max_age=TOKEN_TTL, samesite="lax")
-    return {"user": SESSIONS[token]}
+    return {"user": user_info, "token": token}
 
 
 @app.get("/api/me")
@@ -93,9 +141,12 @@ def me(request: Request):
 
 @app.post("/api/logout")
 def logout(request: Request, response: JSONResponse):
-    token = parse_cookies(request).get("juke_uid")
+    token = get_token_from_request(request)
     if token:
         SESSIONS.pop(token, None)
+        conn = get_db()
+        conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        conn.commit()
     response.delete_cookie("juke_uid")
     return {"ok": True}
 
@@ -121,6 +172,64 @@ async def player_login(request: Request):
     return {"ok": True}
 
 
+# ---------------- search（点歌/歌单页的搜索选择器共用） ----------------
+@app.get("/api/search")
+async def search_songs(request: Request, kw: str):
+    require_user(request)
+    kw = kw.strip()
+    if not kw:
+        raise HTTPException(400, "缺少关键词")
+    from .music_search import fcg_search
+    songs = await asyncio.to_thread(fcg_search, kw)
+    return {"songs": songs}
+
+
+_rec_cache = {"playlists": [], "at": 0.0}
+
+
+@app.get("/api/recommendations")
+async def get_recommendations(limit: int = 12):
+    limit = max(1, min(30, limit))
+    from .music_search import get_recommended_playlists
+    # QQ 上游会在两个内容状态间轮换（偶发只回 1 个）：
+    # 拿到完整列表后缓存 10 分钟，翻转期用缓存兜底，避免前端卡片忽多忽少。
+    global _rec_cache
+    now = time.time()
+    if _rec_cache and now - _rec_cache["at"] < 600 and len(_rec_cache["playlists"]) >= limit:
+        return {"playlists": _rec_cache["playlists"][:limit]}
+    playlists = await asyncio.to_thread(get_recommended_playlists, limit)
+    if playlists:
+        if len(playlists) >= min(limit, 6) or not _rec_cache["playlists"]:
+            _rec_cache = {"playlists": playlists, "at": now}
+        else:
+            playlists = _rec_cache["playlists"]  # 上游翻转期，沿用旧缓存
+    return {"playlists": playlists[:limit]}
+
+
+@app.get("/api/recommendations/{diss_id}/songs")
+async def get_recommendation_songs(diss_id: str, limit: int = 30):
+    limit = max(1, min(100, limit))
+    from .music_search import get_playlist_songs
+    songs = await asyncio.to_thread(get_playlist_songs, diss_id, limit)
+    return {"songs": songs}
+
+
+@app.post("/api/recommendations/{diss_id}/play")
+async def play_recommendation(diss_id: str, request: Request, limit: int = 20, front: bool = False):
+    user = require_user(request)
+    if not player.is_running():
+        raise HTTPException(409, "播放器未启动，请先点击「启动播放器」")
+    if not core.state["allowPlay"]:
+        raise HTTPException(409, "当前不在允许播放时段")
+    from .music_search import get_playlist_songs
+    songs = await asyncio.to_thread(get_playlist_songs, diss_id, limit)
+    if not songs:
+        raise HTTPException(404, "该推荐歌单暂无歌曲或获取失败")
+    for s in (reversed(songs) if front else songs):
+        core.enqueue({"songMid": s.get("songMid", ""), "title": s["title"], "singer": s.get("singer", "")}, user, front=front)
+    return core.snapshot()
+
+
 # ---------------- jukebox state & queue ----------------
 @app.get("/api/state")
 def get_state():
@@ -131,6 +240,7 @@ class QueueAddBody(BaseModel):
     title: str
     singer: str = ""
     songMid: str = ""
+    front: bool = False
 
 
 @app.post("/api/queue/add")
@@ -142,18 +252,20 @@ async def queue_add(body: QueueAddBody, request: Request):
         raise HTTPException(409, "播放器未启动，请先点击「启动播放器」")
     if not core.state["allowPlay"]:
         raise HTTPException(409, "当前不在允许播放时段")
-    item = core.enqueue(body.model_dump(), user)
+    item = core.enqueue(body.model_dump(), user, front=body.front)
     return {"item": item}
 
 
+# 同步 def 端点跑在线程池，对共享队列的「检查-弹出/插入」非原子；
+# async 化后统一在事件循环上串行执行，多人并发删歌/调序不会互相踩。
 @app.post("/api/queue/remove")
-def queue_remove(request: Request, index: int = 0):
+async def queue_remove(request: Request, index: int = 0):
     user = require_user(request)
     return {"removed": core.remove_at(index, user)}
 
 
 @app.post("/api/queue/reorder")
-def queue_reorder(request: Request, start: int = 0, stop: int = 0):
+async def queue_reorder(request: Request, start: int = 0, stop: int = 0):
     require_user(request)
     core.reorder(start, stop)
     return core.snapshot()
@@ -268,15 +380,73 @@ def playlist_del_song(pid: int, sid: int, request: Request):
 
 
 @app.post("/api/playlists/{pid}/play")
-def playlist_play(pid: int, request: Request):
+async def playlist_play(pid: int, request: Request, from_position: int = 0, front: bool = False):
+    """把歌单加入队列。from_position=从第几首开始（含），front=插到队首（「从此播」语义）。"""
     user = require_user(request)
     conn = get_db()
     rows = conn.execute(
         "SELECT song_mid, title, singer FROM playlist_songs WHERE playlist_id=? ORDER BY position",
         (pid,)).fetchall()
-    for r in rows:
-        core.enqueue({"songMid": r["song_mid"], "title": r["title"], "singer": r["singer"]}, user)
+    if from_position > 0:
+        rows = rows[from_position:]
+    # front 时逐首插到队首，倒序遍历保持歌单原始顺序
+    for r in (reversed(rows) if front else rows):
+        core.enqueue({"songMid": r["song_mid"], "title": r["title"], "singer": r["singer"]}, user,
+                     front=front)
     return core.snapshot()
+
+
+class PlaylistImportBody(BaseModel):
+    name: str = ""
+    description: str = ""
+    songs: list[dict] = []
+
+
+@app.get("/api/playlists/{pid}/export")
+def playlist_export(pid: int):
+    conn = get_db()
+    pl = conn.execute("SELECT * FROM playlists WHERE id=?", (pid,)).fetchone()
+    if not pl:
+        raise HTTPException(404, "歌单不存在")
+    songs = conn.execute(
+        "SELECT title, singer, song_mid FROM playlist_songs WHERE playlist_id=? ORDER BY position",
+        (pid,)
+    ).fetchall()
+    return {
+        "version": 1,
+        "type": "jukebox_playlist",
+        "name": pl["name"],
+        "description": pl["description"] or "",
+        "exportedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "songs": [{"title": s["title"], "singer": s["singer"], "songMid": s["song_mid"]} for s in songs]
+    }
+
+
+@app.post("/api/playlists/import")
+def playlist_import(body: PlaylistImportBody, request: Request):
+    user = require_user(request)
+    name = (body.name or "").strip() or f"导入歌单_{time.strftime('%m%d_%H%M')}"
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO playlists (name, description, created_by) VALUES (?, ?, ?)",
+        (name, body.description or "", user["id"])
+    )
+    new_pid = cur.lastrowid
+    pos = 1
+    for s in body.songs:
+        title = (s.get("title") or "").strip()
+        if not title:
+            continue
+        singer = (s.get("singer") or "").strip()
+        song_mid = (s.get("songMid") or s.get("song_mid") or "").strip()
+        cur.execute(
+            "INSERT INTO playlist_songs (playlist_id, song_mid, title, singer, position) VALUES (?, ?, ?, ?, ?)",
+            (new_pid, song_mid, title, singer, pos)
+        )
+        pos += 1
+    conn.commit()
+    return {"id": new_pid, "name": name, "importedCount": pos - 1}
 
 
 # ---------------- history & stats ----------------
