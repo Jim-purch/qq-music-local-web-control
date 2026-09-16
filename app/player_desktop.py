@@ -8,6 +8,8 @@
 
 接口与 app/player.py 完全一致，通过 app/player_select.py 按环境切换。
 """
+BACKEND = "desktop"
+
 import asyncio
 import ctypes
 import os
@@ -392,13 +394,14 @@ def _uia_search_and_click_locked(keyword: str, want: dict):
             raise RuntimeError(f"搜索框输入校验失败（期望 {len(search_text)} 字，实际读到异常内容）")
 
     # 3. 等待搜索结果出现（列表上方会出现「找到...首歌曲」或「播放全部」按钮）
-    # 查找搜索结果列表顶部的「播放」按钮（通常在 Y=250~450 之间，文字为"播放"）
+    # 查找搜索结果列表顶部的「播放」按钮；纵坐标按窗口相对位置过滤——
+    # 不同机器窗口位置/DPI 缩放不同，绝对屏幕坐标不可移植（其余机器部署踩过）
     time.sleep(1.0)
+    wr = w.rectangle()
     play_all_btns = _find_elements(
         w,
         lambda e: e.element_info.name == "播放"
-        and e.rectangle().top > 250
-        and e.rectangle().top < 450,
+        and wr.top + 150 < e.rectangle().top < wr.top + 520,
         timeout=10,
     )
 
@@ -408,7 +411,6 @@ def _uia_search_and_click_locked(keyword: str, want: dict):
         _post_click(hwnd, (pr.left + pr.right) // 2, (pr.top + pr.bottom) // 2)
     else:
         # 备选保底：如果未找到播放按钮，点击第一行左侧播放位置（大约在搜索框下方 300 像素左右）
-        wr = w.rectangle()
         _post_click(hwnd, wr.left + 350, wr.top + 360)
         time.sleep(0.5)
         _post_dblclick(hwnd, wr.left + 380, wr.top + 360)

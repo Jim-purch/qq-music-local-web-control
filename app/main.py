@@ -194,7 +194,13 @@ async def player_start(request: Request):
 @app.get("/api/player/status")
 async def player_status():
     running = player.is_running()
-    return {"running": running, "loggedIn": await player.is_logged_in() if running else False}
+    status = {"running": running,
+              "loggedIn": await player.is_logged_in() if running else False,
+              "backend": getattr(player, "BACKEND", "web")}
+    if status["backend"] == "desktop":
+        from .player_desktop import _install_dir
+        status["installed"] = _install_dir() is not None
+    return status
 
 
 @app.post("/api/player/login")

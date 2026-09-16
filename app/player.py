@@ -14,6 +14,7 @@ from typing import Optional
 from playwright.async_api import async_playwright, BrowserContext, Page
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BACKEND = "web"
 PROFILE_DIR = os.path.join(BASE_DIR, "data", "chrome-profile")
 SELECTORS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selectors.json")
 START_URL = "https://y.qq.com"

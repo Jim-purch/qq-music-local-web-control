@@ -1054,12 +1054,17 @@ async function refreshPlayerStatus() {
   try {
     const st = await api('/api/player/status');
     const chip = $('#playerStatus');
-    chip.textContent = st.running ? (st.loggedIn ? '播放器在线' : '未登录') : '未连接';
+    chip.textContent = st.running ? (st.loggedIn ? '播放器在线' : '未登录')
+      : (st.installed === false ? '未安装客户端' : '未连接');
     chip.classList.toggle('on', st.running && st.loggedIn);
     $('#btnOpenLogin').classList.toggle('hidden', !st.running || st.loggedIn);
     $('#playerHint').textContent = st.running
       ? (st.loggedIn ? '播放器运行中，登录态正常。' : '播放器已启动但未登录，点下方按钮扫码。')
-      : '启动后会打开一个 Chrome/Edge 窗口登录 QQ 音乐网页版，登录一次即可长期生效。';
+      : st.installed === false
+        ? '本机未检测到 QQ 音乐客户端：先安装 QQ 音乐 Windows 版，在客户端里登录一次，再回到这里点「启动播放器」。'
+        : st.backend === 'desktop'
+          ? '启动后会拉起本机 QQ 音乐客户端；首次使用需在客户端里登录一次。'
+          : '启动后会打开一个 Chrome/Edge 窗口登录 QQ 音乐网页版，登录一次即可长期生效。';
   } catch {}
 }
 const kbdToggleEl = $('#kbdToggle');

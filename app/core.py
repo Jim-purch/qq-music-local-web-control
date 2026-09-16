@@ -460,7 +460,9 @@ def refresh_windows():
     minutes = now.hour * 60 + now.minute
     conn = get_db()
     rows = conn.execute("SELECT * FROM play_windows WHERE enabled=1").fetchall()
-    inside = False
+    # 未配置任何启用时段 = 全天可播（与设置页「暂无时段限制（全天可播）」文案一致）；
+    # 全新部署没有 data/jukebox.db，若按禁播处理会导致点歌全部 409。
+    inside = not rows
     for w in rows:
         if day not in [d.strip() for d in w["days"].split(",")]:
             continue
