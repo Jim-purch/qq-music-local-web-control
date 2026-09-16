@@ -268,7 +268,7 @@ def _find_elements(w, predicate, timeout=15, poll=0.8):
 _WND_MSG = ctypes.windll.user32
 WM_LBUTTONDOWN, WM_LBUTTONUP, WM_LBUTTONDBLCLK = 0x0201, 0x0202, 0x0203
 WM_CHAR, WM_KEYDOWN, WM_KEYUP = 0x0102, 0x0100, 0x0101
-VK_BACK, VK_RETURN = 0x08, 0x0D
+VK_BACK, VK_RETURN, VK_END = 0x08, 0x0D, 0x23
 
 
 class _POINT(ctypes.Structure):
@@ -299,6 +299,43 @@ def _post_backspaces(hwnd, n=60):
         _WND_MSG.PostMessageW(hwnd, WM_KEYDOWN, VK_BACK, 0)
         _WND_MSG.PostMessageW(hwnd, WM_KEYUP, VK_BACK, 0)
     time.sleep(0.2)
+
+
+def _edit_value(edit) -> str:
+    """读搜索框当前文本（UIA ValuePattern；自绘框 name 恒空，只能走 get_value）。"""
+    try:
+        return edit.get_value() or ""
+    except Exception:
+        return ""
+
+
+def _clear_search_box(w, edit, edit_rect=None, max_rounds=6):
+    """把搜索框清干净并回读校验，直到为空。清不掉返回 False。
+
+    两个坑叠加导致过切歌必失败（搜索词超长时）：
+    1. 点击聚焦时光标落在点击点对应位置——长文本下在字符串中间，
+       退格只删光标左侧、输入也插中间，形成「残留+新词」夹心；
+       先发 VK_END 把光标推到末尾再退格。
+    2. 上一轮搜索回车后焦点已离开搜索框，退格会被整体忽略；
+       每轮先重新投递点击聚焦。
+    长度按 UIA 读到的实际字符数发（固定 60 连发清不完超长残留）。
+    """
+    hwnd = w.handle
+    if edit_rect is None:
+        edit_rect = edit.rectangle()
+    cx, cy = (edit_rect.left + edit_rect.right) // 2, (edit_rect.top + edit_rect.bottom) // 2
+    for _ in range(max_rounds):
+        cur = _edit_value(edit)
+        if not cur.strip():
+            return True
+        _post_click(hwnd, cx, cy)
+        time.sleep(0.3)
+        for vk in (VK_END,):
+            _WND_MSG.PostMessageW(hwnd, WM_KEYDOWN, vk, 0)
+            _WND_MSG.PostMessageW(hwnd, WM_KEYUP, vk, 0)
+        # +20 余量：兜住 UIA 读数与框内 UTF-16 单元数的零头偏差
+        _post_backspaces(hwnd, len(cur) + 20)
+    return not _edit_value(edit).strip()
 
 
 def _post_type(hwnd, text):
@@ -332,15 +369,27 @@ def _uia_search_and_click_locked(keyword: str, want: dict):
     if not search_text:
         search_text = keyword
 
-    # 2. 搜索框（客户端唯一的 Edit）：投递点击聚焦 → 退格清空 → 逐字输入 → 回车
+    # 2. 搜索框（客户端唯一的 Edit）：投递点击聚焦 → 清空 → 逐字输入 → 回车
     edits = _find_elements(w, lambda e: e.element_info.control_type == "Edit", timeout=8)
     if not edits:
         raise RuntimeError("找不到客户端搜索框（窗口可能未就绪）")
     er = edits[0].rectangle()
     _post_click(hwnd, (er.left + er.right) // 2, (er.top + er.bottom) // 2)
     time.sleep(0.4)
-    _post_backspaces(hwnd)
+    if not _clear_search_box(w, edits[0], er):
+        raise RuntimeError("搜索框残留旧关键词清不掉，本次点歌放弃（客户端可能卡住）")
     _post_type(hwnd, search_text)
+
+    # 输入校验：残留 / 掉字都会让搜索词变味，回读不符就再清再输一轮
+    time.sleep(0.4)
+    typed = _edit_value(edits[0])
+    if typed.strip() != search_text.strip():
+        if not _clear_search_box(w, edits[0], er):
+            raise RuntimeError("搜索框清不掉，无法重试输入")
+        _post_type(hwnd, search_text)
+        time.sleep(0.4)
+        if _edit_value(edits[0]).strip() != search_text.strip():
+            raise RuntimeError(f"搜索框输入校验失败（期望 {len(search_text)} 字，实际读到异常内容）")
 
     # 3. 等待搜索结果出现（列表上方会出现「找到...首歌曲」或「播放全部」按钮）
     # 查找搜索结果列表顶部的「播放」按钮（通常在 Y=250~450 之间，文字为"播放"）
