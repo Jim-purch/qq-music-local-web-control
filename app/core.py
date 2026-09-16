@@ -136,6 +136,8 @@ async def _loop_once():
 
 async def start_play(item: dict, requested_by: dict):
     info = await player.search_and_play(item)
+    global _cur_started_mono
+    _cur_started_mono = time.monotonic()
     started_at = dt.datetime.now().isoformat(timespec="seconds")
     conn = get_db()
     cur = conn.execute(
@@ -246,12 +248,19 @@ _mismatch_polls = 0
 _tracked_cur_started = None  # 已跟踪的 current.startedAt（换歌时重置进度基线）
 _last_pos = -1               # 上一轮 current 的播放进度（秒）；-1=无记录
 _restart_suspect = False     # 上一轮疑似同名重播（进度回退到开头）
+_cur_started_mono = 0.0      # 当前歌起播的单调时钟时刻，用于起播保护
 
 # 提前切换提前量（秒）：从触发切歌到客户端真正换曲需要 fcg 搜索 + UIA 自动操作，
 # 合计约 4~12 秒。旧歌进入最后这段时间就提前铺开下一首的搜索播放，
 # 客户端无缝接上新歌——没有暂停空档，也不会漏播客户端内部列表的歌。
 # 副作用：旧歌的最后几秒会被新歌覆盖（相当于提前几秒切歌）。短于提前量的歌不适用。
 SWITCH_LEAD_SEC = 10
+
+# 起播保护（秒）：起播瞬间 SMTC 标题可能已换、时间轴还残留上一首的进度
+# （上一首若停在结尾附近，dur-pos≤SWITCH_LEAD 会被误判成「该提前切歌」；
+# 残留大进度 followed by 归零会被误判成「同名重播」）——都会把新歌秒切掉。
+# 起播后一段时间内不做任何「播完/重播」判定；真实歌曲播到尾声必然已超过此值。
+CUR_MIN_PLAY_SEC = 20
 
 
 async def _pause_client_after_end():
@@ -435,13 +444,15 @@ async def poll_now_playing():
                     pos = np.get("positionSec") or 0
                     if cur and key == cur["title"]:
                         dur = np.get("durationSec") or 0
+                        fresh = (time.monotonic() - _cur_started_mono) < CUR_MIN_PLAY_SEC
                         # 提前切换：旧歌只剩 lead 秒且队列有下一首 → 立即进入切歌流程。
                         # 不暂停客户端：旧歌把尾巴放完，「播放全部」点击时客户端直接换曲。
-                        if (np.get("playing") is True and dur > SWITCH_LEAD_SEC
+                        # 起播保护期内不判：SMTC 时间轴此时可能残留上一首的进度。
+                        if (not fresh and np.get("playing") is True and dur > SWITCH_LEAD_SEC
                                 and state["queue"] and not state["switching"]
                                 and 0 < dur - pos <= SWITCH_LEAD_SEC):
                             await finish_current()
-                        elif _last_pos > 30 and pos < 10:
+                        elif not fresh and _last_pos > 30 and pos < 10:
                             _restart_suspect = True
                         elif _restart_suspect:
                             # 上一轮疑似重播，本轮同名仍在播：确认重播，按播完处理
