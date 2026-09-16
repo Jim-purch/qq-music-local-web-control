@@ -1222,6 +1222,11 @@ function fmtListen(n) {
   return n ? `${n} 次播放` : '';
 }
 
+// 歌单详情弹窗是 openRecModal 里创建的 .modal-mask 遮罩，统一从这里关闭
+function closeRecModal() {
+  document.querySelectorAll('.modal-mask').forEach(m => m.remove());
+}
+
 async function playRecommendation(dissid, front) {
   try {
     await api(`/api/recommendations/${dissid}/play?front=${front ? 1 : 0}`, { method: 'POST' });
