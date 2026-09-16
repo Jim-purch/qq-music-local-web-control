@@ -298,6 +298,9 @@ def _client_queue_sig(q):
 
 
 def _apply_client_queue(q):
+    if q and q.pop("jukeboxSearchResidue", False):
+        # 点唱机自己点歌产生的搜索结果残留，不是用户真想听的队列，不上站
+        q = None
     changed = _client_queue_sig(state["clientQueue"]) != _client_queue_sig(q)
     state["clientQueue"] = q
     if changed:
@@ -376,6 +379,10 @@ def maybe_sync_client_queue(np):
                 _q_periodic_at = now
                 schedule_client_queue_sync()
             return
+    # 客户端正在吃点唱机搜索残留列表：读出来也是残留，直接跳过
+    if getattr(player, "is_recent_jukebox_search_title", None) and \
+            player.is_recent_jukebox_search_title(title):
+        return
     if _q_sync_meta["title"] == title and now - _q_sync_meta["at"] < 300:
         return  # 这首歌已完整同步过
     _q_sync_meta = {"title": title, "at": now}

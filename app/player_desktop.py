@@ -12,6 +12,7 @@ BACKEND = "desktop"
 
 import asyncio
 import ctypes
+import json
 import os
 import subprocess
 import threading
@@ -429,6 +430,9 @@ async def search_and_play(target, index: int = 0) -> dict:
         song_mid = ""
 
     songs = await asyncio.to_thread(fcg_search, keyword)
+    if songs:
+        # 客户端「播放全部」会把这份结果列表整个收进播放队列 → 标记为搜索残留，不上站
+        mark_jukebox_search(songs)
     if not songs:
         if isinstance(target, dict):
             want = {"title": target.get("title", keyword), "singer": target.get("singer", ""), "songMid": song_mid}
@@ -437,6 +441,7 @@ async def search_and_play(target, index: int = 0) -> dict:
             title = parts[0] if parts else keyword
             singer = parts[1] if len(parts) >= 2 else ""
             want = {"title": title, "singer": singer, "songMid": ""}
+        mark_jukebox_search([want])  # fcg 没搜到也标记：客户端仍会搜出它自己的结果列表
     else:
         want = _pick_song(songs, keyword, song_mid) if index == 0 else (
             songs[index] if index < len(songs) else songs[0])
@@ -525,7 +530,8 @@ def _read_queue_visible(q):
             bands[-1][1] = name
         else:
             bands.append([name, "", top])
-    rows = [(t, s) for t, s, _ in bands if s]
+    # 面板标题「播放队列」偶尔会在列表重渲染瞬间被并进行里，过滤掉
+    rows = [(t, s) for t, s, _ in bands if s and t != "播放队列"]
     cur_idx = -1
     for bt in cur_btns:
         for i, (_t, _s, top) in enumerate(bands):
@@ -626,8 +632,69 @@ def get_client_queue_sync(max_songs: int = 300) -> Optional[dict]:
         return _get_client_queue_locked(max_songs)
 
 
+# 点唱机点歌 = 在客户端搜索后点「播放全部」，客户端会把整个搜索结果列表收进
+# 播放队列。这份「搜索残留」不是用户真正想听的队列，不该同步上站误导人：
+# 记住每次点唱机搜索的结果清单，读到的客户端队列与它高度吻合即判定为残留。
+_jukebox_search_mark = {"titles": [], "at": 0.0}
+_SEARCH_MARK_TTL = 1800  # 30 分钟内的搜索结果才算残留
+_MARK_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "data", "jukebox_search_mark.json")
+
+
+def mark_jukebox_search(songs):
+    """点歌流程在拿到搜索结果后调用，标记这次客户端队列将变成搜索残留。"""
+    global _jukebox_search_mark
+    titles = [s.get("title", "") for s in songs if s.get("title")]
+    _jukebox_search_mark = {"titles": titles[:20], "at": time.time()}
+    try:  # 持久化：服务重启后仍能识别「重启前最后一次点歌」留下的搜索残留
+        with open(_MARK_PATH, "w", encoding="utf-8") as f:
+            json.dump(_jukebox_search_mark, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _load_search_mark():
+    global _jukebox_search_mark
+    try:
+        with open(_MARK_PATH, encoding="utf-8") as f:
+            m = json.load(f)
+        if isinstance(m, dict) and m.get("titles") and time.time() - m.get("at", 0) <= _SEARCH_MARK_TTL:
+            _jukebox_search_mark = m
+    except Exception:
+        pass
+
+
+_load_search_mark()
+
+
+def is_recent_jukebox_search_title(title: str) -> bool:
+    """该歌名是否出现在最近的点唱机搜索结果里（用于跳过无谓的队列读取）。"""
+    mark = _jukebox_search_mark
+    if not title or not mark["titles"]:
+        return False
+    if time.time() - mark["at"] > _SEARCH_MARK_TTL:
+        return False
+    return title in mark["titles"]
+
+
+def _looks_like_jukebox_search(qsongs) -> bool:
+    """客户端队列头部是否与最近一次点唱机搜索结果高度吻合。"""
+    mark = _jukebox_search_mark
+    if not mark["titles"] or not qsongs:
+        return False
+    if time.time() - mark["at"] > _SEARCH_MARK_TTL:
+        return False
+    head = [s.get("title", "") for s in qsongs[:8]]
+    hits = sum(1 for t in head if t in mark["titles"])
+    # 首曲就是搜索结果里的歌 + 至少 2 首重合；或首屏重合过半
+    return (head[0] in mark["titles"] and hits >= 2) or hits >= 5
+
+
 async def client_queue(max_songs: int = 300) -> Optional[dict]:
-    return await asyncio.to_thread(get_client_queue_sync, max_songs)
+    q = await asyncio.to_thread(get_client_queue_sync, max_songs)
+    if q and _looks_like_jukebox_search(q["songs"]):
+        q["jukeboxSearchResidue"] = True
+    return q
 
 
 # ---------------- 系统音量（沿用 pycaw 实现） ----------------
