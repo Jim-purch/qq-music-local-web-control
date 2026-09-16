@@ -204,6 +204,22 @@ async def player_login(request: Request):
     return {"ok": True}
 
 
+# ---------------- 客户端播放队列（桌面后端：UIA 读客户端「播放队列」面板） ----------------
+@app.get("/api/client_queue")
+def client_queue_ep():
+    return {"supported": getattr(player, "SUPPORTS_QUEUE_READ", False),
+            "queue": core.state["clientQueue"]}
+
+
+@app.post("/api/client_queue/refresh")
+async def client_queue_refresh(request: Request):
+    require_user(request)
+    q = await core.sync_client_queue_now()
+    if q is None and not getattr(player, "SUPPORTS_QUEUE_READ", False):
+        raise HTTPException(409, "当前播放后端不支持读取客户端播放队列")
+    return {"queue": q}
+
+
 # ---------------- search（点歌/歌单页的搜索选择器共用） ----------------
 @app.get("/api/search")
 async def search_songs(request: Request, kw: str):

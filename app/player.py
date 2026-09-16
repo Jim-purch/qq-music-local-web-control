@@ -258,6 +258,14 @@ async def stop():
     _pw = None
 
 
+# 网页版后端读不到客户端播放队列（那是桌面客户端的 UI 概念），恒返 None
+SUPPORTS_QUEUE_READ = False
+
+
+async def client_queue(max_songs: int = 300) -> Optional[dict]:
+    return None
+
+
 # ---------------- system volume ----------------
 # Windows: pycaw (Core Audio). macOS: osascript. Added lazily so missing
 # optional deps don't break other features.

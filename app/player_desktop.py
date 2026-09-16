@@ -400,5 +400,184 @@ async def search_and_play(target, index: int = 0) -> dict:
     return {"title": want["title"], "singer": want["singer"]}
 
 
+# ---------------- 通道四：UIA 读取客户端播放队列（正在播放的歌单） ----------------
+# 客户端底部栏的「播放队列」按钮点开一个独立弹窗，其 UIA 树完整挂在主窗口树下
+# （不能按弹窗自身 hwnd 读——单独 connect 读不到内容）。列表是虚拟化的，一屏
+# 约显示 9 行，完整队列要靠 WM_MOUSEWHEEL 滚动增量合并；lParam 必须用屏幕坐标。
+SUPPORTS_QUEUE_READ = True
+WM_MOUSEWHEEL = 0x020A
+WM_CLOSE = 0x0010
+
+
+def _find_queue_panel(w):
+    """主窗口树里名为「播放队列」的子弹窗（面板打开时才存在）。"""
+    try:
+        for c in w.children():
+            if c.element_info.control_type == "Window" and c.element_info.name == "播放队列":
+                return c
+    except Exception:
+        pass
+    return None
+
+
+def _find_queue_button(w, timeout=6):
+    return _find_elements(
+        w,
+        lambda e: e.element_info.control_type == "Button" and e.element_info.name == "播放队列",
+        timeout=timeout,
+    )
+
+
+def _wheel_panel(q, delta: int):
+    """向队列面板滚一档（delta=120 一档，负值向下）。lParam 是屏幕坐标。"""
+    qh = q.element_info.handle
+    r = q.element_info.rectangle
+    x, y = r.left + r.width() // 2, r.top + min(300, r.height() // 2)
+    wp = (delta & 0xFFFF) << 16
+    lp = ((y & 0xFFFF) << 16) | (x & 0xFFFF)
+    _WND_MSG.PostMessageW(qh, WM_MOUSEWHEEL, wp, lp)
+    time.sleep(0.55)
+
+
+def _read_queue_visible(q):
+    """读面板当前可见的队列行。
+
+    行结构：标题 Text 在上半（高约 18），歌手 Text 在下半（高约 16，间隔 22px），
+    行高 58px → 按文本纵坐标以 30px 分带即可切行。正在播的行内含「暂停/播放」按钮。
+    返回 (rows, total, cur_idx)：rows=[(title, singer)] 按显示顺序，total=面板标称总数。
+    """
+    import re
+    texts, cur_btns, total = [], [], None
+    try:
+        for e in q.descendants():
+            info = e.element_info
+            try:
+                r = info.rectangle
+            except Exception:
+                continue
+            name = info.name or ""
+            ctype = info.control_type
+            if ctype == "Text" and name:
+                m = re.match(r"^共(\d+)首", name)
+                if m:
+                    total = int(m.group(1))
+                elif r.height() >= 16 and r.width() >= 20:
+                    texts.append((r.top, r.left, name))
+            elif ctype == "Button" and name in ("暂停", "播放"):
+                cur_btns.append(r.top)
+    except Exception:
+        return None, None, -1
+    texts.sort()
+    bands = []  # [title, singer, band_top]
+    for top, _left, name in texts:
+        if bands and top - bands[-1][2] < 30:
+            bands[-1][1] = name
+        else:
+            bands.append([name, "", top])
+    rows = [(t, s) for t, s, _ in bands if s]
+    cur_idx = -1
+    for bt in cur_btns:
+        for i, (_t, _s, top) in enumerate(bands):
+            if bands[i][1] and abs(top - bt) < 45:
+                cur_idx = i
+                break
+    return rows, total, cur_idx
+
+
+def _get_client_queue_locked(max_songs: int) -> Optional[dict]:
+    w = _main_window()
+    if w is None:
+        return None
+    q = _find_queue_panel(w)
+    if q is None:
+        btns = _find_queue_button(w)
+        if not btns:
+            return None
+        br = btns[0].rectangle()
+        _post_click(w.handle, (br.left + br.right) // 2, (br.top + br.bottom) // 2)
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            q = _find_queue_panel(w)
+            if q is not None:
+                break
+            time.sleep(0.4)
+        if q is None:
+            return None
+    try:
+        time.sleep(0.6)
+        # 面板可能停在任意滚动位置：先滚回顶部（读到不再变化为止）。
+        # 每次上滚约跳 9 行，30 次足够从 300 首的队列底部回到顶部。
+        prev = None
+        for _ in range(30):
+            rows, _, _ = _read_queue_visible(q)
+            if rows is None:
+                return None
+            if rows == prev:
+                break
+            prev = rows
+            _wheel_panel(q, +720)
+        collected = []       # [(title, singer)] 已合并的完整列表
+        seen = set()
+        cur_index, total, stall = -1, None, 0
+        for _ in range(120):
+            rows, total_n, cur_vis = _read_queue_visible(q)
+            if rows is None:
+                break
+            if total_n:
+                total = total_n
+            base = 0
+            if collected:
+                for k in range(min(len(collected), len(rows), 15), 0, -1):
+                    if collected[-k:] == rows[:k]:
+                        base = k
+                        break
+            before = len(collected)
+            if cur_vis >= 0:
+                abs_cur = before + (cur_vis - base)
+                if base <= cur_vis < len(rows):
+                    cur_index = abs_cur
+            added = 0
+            for t, s in rows[base:]:
+                # 同名同歌手的去重：播放列表里偶有重复歌，但保稳定性更划算
+                if (t, s) in seen:
+                    continue
+                seen.add((t, s))
+                collected.append((t, s))
+                added += 1
+            if (total and len(collected) >= total) or len(collected) >= max_songs:
+                break
+            if added == 0:
+                stall += 1
+                if stall >= 2:
+                    break
+            else:
+                stall = 0
+            _wheel_panel(q, -360)
+        return {
+            "songs": [{"title": t, "singer": s} for t, s in collected],
+            "currentIndex": cur_index,
+            "total": total or len(collected),
+        }
+    finally:
+        # 读完好关上面板：给弹窗发 WM_CLOSE（等价点右上角 ✕）。
+        # 底部栏「播放队列」按钮只开不关；面板头部两个无名按钮分不清哪个是「清空」，绝不能碰。
+        try:
+            qw = _find_queue_panel(w)
+            if qw is not None:
+                _WND_MSG.PostMessageW(qw.element_info.handle, WM_CLOSE, 0, 0)
+        except Exception:
+            pass
+
+
+def get_client_queue_sync(max_songs: int = 300) -> Optional[dict]:
+    """读取客户端当前播放队列（阻塞、串行于 _uia_lock，与点歌自动化互斥）。"""
+    with _uia_lock:
+        return _get_client_queue_locked(max_songs)
+
+
+async def client_queue(max_songs: int = 300) -> Optional[dict]:
+    return await asyncio.to_thread(get_client_queue_sync, max_songs)
+
+
 # ---------------- 系统音量（沿用 pycaw 实现） ----------------
 from .player import get_system_volume, set_system_volume  # noqa: E402

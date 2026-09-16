@@ -3,6 +3,7 @@ import asyncio
 import datetime as dt
 import json
 import threading
+import time
 
 from .player_select import player
 from . import keepalive
@@ -15,6 +16,7 @@ state = {
     "allowPlay": True,
     "nowPlaying": None,
     "switching": None,    # 正在切歌的目标歌：{"title", "singer", "requestedBy"}
+    "clientQueue": None,  # 客户端播放队列：{"songs":[{title,singer}], "currentIndex", "total"}；仅桌面后端
 }
 
 _clients = set()  # asyncio websockets
@@ -280,6 +282,115 @@ def _update_keepalive(np):
         keepalive.start()
 
 
+# ---------------- 客户端播放队列同步（仅桌面后端） ----------------
+# 客户端自己连播/被人直接操作时，把它的播放队列读出来同步到网页展示。
+# 点唱机自己点的歌不同步：那时客户端队列就是搜索结果，没有展示价值（清空展示）。
+_q_sync_meta = {"title": None, "at": 0.0}
+_q_sync_task = None
+_q_periodic_at = 0.0
+
+
+def _client_queue_sig(q):
+    if not q:
+        return None
+    return (tuple((s.get("title", ""), s.get("singer", "")) for s in q.get("songs", [])),
+            q.get("currentIndex"))
+
+
+def _apply_client_queue(q):
+    changed = _client_queue_sig(state["clientQueue"]) != _client_queue_sig(q)
+    state["clientQueue"] = q
+    if changed:
+        broadcast("clientQueue:changed", q)
+
+
+async def _do_sync_client_queue():
+    if state["switching"] or not getattr(player, "SUPPORTS_QUEUE_READ", False):
+        return
+    try:
+        q = await player.client_queue()
+    except Exception as e:
+        print("[clientQueue]", e)
+        return
+    _apply_client_queue(q)
+
+
+def schedule_client_queue_sync():
+    global _q_sync_task
+    if _loop is None or not getattr(player, "SUPPORTS_QUEUE_READ", False):
+        return
+    if _q_sync_task and not _q_sync_task.done():
+        return
+    _q_sync_task = asyncio.run_coroutine_threadsafe(_do_sync_client_queue(), _loop)
+
+
+def _advance_client_queue_index(title: str) -> int:
+    """在缓存的客户端队列里定位新歌：优先按线性推进（当前位后 1~3 首），
+    找不到再全局找（客户端里手动跳歌）；都没有说明队列换了，返回 -1。"""
+    cq = state["clientQueue"]
+    if not cq:
+        return -1
+    songs = cq.get("songs", [])
+    start = cq.get("currentIndex", -1) or 0
+    for d in (1, 2, 3):
+        i = start + d
+        if 0 <= i < len(songs) and songs[i].get("title") == title:
+            return i
+    for i, s in enumerate(songs):
+        if s.get("title") == title:
+            return i
+    return -1
+
+
+def maybe_sync_client_queue(np):
+    """由 poll_now_playing 驱动：检测到客户端自行换歌 → 同步其播放队列。
+
+    - 点唱机点的歌（np.title == current.title）跳过，并清掉旧展示；
+    - 新歌能在缓存队列里定位到 → 只本地推进 currentIndex（零开销，高亮实时）；
+    - 定位不到 → 队列多半被换掉了，触发一次完整 UIA 读取（带 5 分钟抑制 + 10 分钟周期兜底）。
+    """
+    global _q_sync_meta, _q_periodic_at
+    if not getattr(player, "SUPPORTS_QUEUE_READ", False):
+        return
+    now = time.time()
+    title = (np or {}).get("title")
+    cur = state["current"]
+    if title and cur and title == cur["title"]:
+        if state["clientQueue"] is not None:
+            _apply_client_queue(None)  # 点唱机接管播放，客户端队列展示退场
+        _q_sync_meta = {"title": title, "at": now}
+        return
+    if state["switching"]:
+        return
+    if not title:
+        return
+    cq = state["clientQueue"]
+    if cq:
+        i = _advance_client_queue_index(title)
+        if i >= 0:
+            if i != cq.get("currentIndex"):
+                cq["currentIndex"] = i
+                broadcast("clientQueue:changed", cq)
+            _q_sync_meta = {"title": title, "at": now}
+            if now - _q_periodic_at > 600:  # 兜底周期完整刷新：抓客户端里手动增删的歌
+                _q_periodic_at = now
+                schedule_client_queue_sync()
+            return
+    if _q_sync_meta["title"] == title and now - _q_sync_meta["at"] < 300:
+        return  # 这首歌已完整同步过
+    _q_sync_meta = {"title": title, "at": now}
+    _q_periodic_at = now
+    schedule_client_queue_sync()
+
+
+async def sync_client_queue_now():
+    """手动刷新入口（API）：立即读一次客户端队列。切歌期间返回 None。"""
+    if state["switching"]:
+        return None
+    await _do_sync_client_queue()
+    return state["clientQueue"]
+
+
 async def poll_now_playing():
     """轮询 SMTC 正在播放，驱动切歌。
 
@@ -297,6 +408,7 @@ async def poll_now_playing():
             np = await player.now_playing()
             state["nowPlaying"] = np
             _update_keepalive(np)
+            maybe_sync_client_queue(np)
             if np:
                 key = np["title"]
                 cur = state["current"]

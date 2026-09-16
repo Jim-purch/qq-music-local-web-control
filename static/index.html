@@ -205,6 +205,15 @@
       </div>
       <h2 class="sec-title" style="margin-top: 14px;">接下来</h2>
       <ol id="queueList" class="queue"></ol>
+      <!-- 客户端自身正在播放的播放列表（桌面客户端后端自动同步） -->
+      <div id="clientQueueBox" class="cq-box hidden">
+        <div class="cq-head">
+          <h2 class="sec-title">客户端播放列表<span id="cqMeta" class="cq-meta"></span></h2>
+          <button id="btnCqRefresh" class="mini-btn" title="重新读取 QQ 音乐客户端的播放队列">刷新</button>
+        </div>
+        <p class="cq-hint">这是 QQ 音乐客户端自己正在放的队列（比如有人直接在客户端上放了歌单），点唱机不接管它。</p>
+        <ol id="cqList" class="cq-list"></ol>
+      </div>
     </aside>
   </main>
 </div>

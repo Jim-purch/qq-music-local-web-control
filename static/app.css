@@ -175,6 +175,28 @@ input[type=range] { accent-color: var(--amber); width: 140px; }
 .mini-btn:hover { border-color: var(--amber-dim); color: var(--amber); }
 .q-empty { color: var(--cream-dim); font-size: 14px; padding: 8px 0; }
 
+/* ---------- 客户端播放列表（QQ 音乐客户端自身队列） ---------- */
+.cq-box { margin-top: 30px; padding-top: 6px; }
+.cq-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.cq-head .sec-title { margin: 0 0 6px; font-size: 16px; }
+.cq-meta { font-size: 12px; font-weight: 400; color: var(--cream-dim); letter-spacing: 0; }
+.cq-hint { font-size: 12px; color: var(--cream-dim); margin: 0 0 8px; line-height: 1.5; }
+.cq-list {
+  list-style: none; padding: 0; margin: 0;
+  max-height: 320px; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 12px;
+}
+.cq-list li {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-bottom: 1px solid var(--line);
+}
+.cq-list li:last-child { border-bottom: none; }
+.cq-idx { font-size: 12px; color: var(--cream-dim); width: 20px; text-align: right; flex: none; }
+.cq-list li.cq-cur { background: rgba(232, 163, 61, 0.08); }
+.cq-list li.cq-cur .cq-idx { color: var(--amber); }
+.cq-list li.cq-cur .q-title b { color: var(--amber); }
+.cq-list li.cq-done { opacity: 0.45; }
+
 /* ---------- search ---------- */
 .search-form { display: flex; gap: 10px; max-width: 560px; }
 .search-form input {

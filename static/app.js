@@ -203,7 +203,41 @@ function applyState(s) {
   // 队列顶栏正在播放卡片
   updateQueueNpCard(cur, np, s);
   renderQueue();
+  renderClientQueue(s.clientQueue);
 }
+
+// ---------- 客户端播放列表（QQ 音乐客户端自己的队列） ----------
+function renderClientQueue(cq) {
+  const box = $('#clientQueueBox');
+  if (!box) return;
+  if (!cq || !Array.isArray(cq.songs) || !cq.songs.length) {
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+  $('#cqMeta').textContent = ` · ${cq.songs.length} 首`;
+  const idx = Number.isInteger(cq.currentIndex) ? cq.currentIndex : -1;
+  $('#cqList').innerHTML = cq.songs.map((s, i) => `
+    <li class="${i === idx ? 'cq-cur' : (idx >= 0 && i < idx ? 'cq-done' : '')}">
+      <span class="cq-idx">${i === idx ? '♪' : i + 1}</span>
+      <div class="q-title"><b>${esc(s.title)}</b><span>${esc(s.singer || '')}</span></div>
+    </li>`).join('');
+  const cur = $('#cqList .cq-cur');
+  if (cur) cur.scrollIntoView({ block: 'nearest' });
+}
+
+const btnCqRefresh = $('#btnCqRefresh');
+if (btnCqRefresh) btnCqRefresh.onclick = async () => {
+  btnCqRefresh.disabled = true;
+  btnCqRefresh.textContent = '读取中…';
+  try {
+    const { queue: cq } = await api('/api/client_queue/refresh', { method: 'POST' });
+    renderClientQueue(cq);
+    if (!cq) showErr(new Error('没读到客户端队列（客户端可能没在播放）'));
+  } catch (e) { showErr(e); }
+  btnCqRefresh.disabled = false;
+  btnCqRefresh.textContent = '刷新';
+};
 
 function updateQueueNpCard(cur, np, s) {
   const card = $('#queueNowPlaying');
