@@ -238,15 +238,8 @@ def _fetch_recommend_playlists(category_id: int, sort_id: int, limit: int) -> li
     return out
 
 
-def fcg_get_playlist_songs(dissid: str, limit: int = 30) -> list:
-    """根据 dissid 获取歌单歌曲列表。dissid 形如 top:26 时走官方榜单接口."""
-    if str(dissid).startswith("top:"):
-        return _fetch_toplist_songs(str(dissid)[4:], limit)
-    try:
-        diss_num = int(dissid)
-    except (ValueError, TypeError):
-        diss_num = dissid
-
+def _fetch_diss_songs_page(diss_num, song_begin: int, song_num: int) -> list:
+    """CgiGetDiss 单页抓取：返回 [{songMid, title, singer, interval}, ...]。"""
     payload = {
         "comm": {"ct": 24, "cv": 0},
         "playlist": {
@@ -255,16 +248,15 @@ def fcg_get_playlist_songs(dissid: str, limit: int = 30) -> list:
             "param": {
                 "disstid": diss_num,
                 "onlysonglist": 1,
-                "song_begin": 0,
-                "song_num": limit,
+                "song_begin": song_begin,
+                "song_num": song_num,
             },
         },
     }
     req = urllib.request.Request(
         SEARCH_URL,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Referer": "https://y.qq.com/",
-                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+        headers={"Content-Type": "application/json", **_HEADERS},
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         data = json.loads(resp.read().decode("utf-8"))
@@ -282,6 +274,36 @@ def fcg_get_playlist_songs(dissid: str, limit: int = 30) -> list:
             "interval": s.get("interval", 0),
         })
     return out
+
+
+def fcg_get_playlist_songs(dissid: str, limit: int = 30) -> list:
+    """根据 dissid 获取歌单歌曲列表。dissid 形如 top:26 时走官方榜单接口."""
+    if str(dissid).startswith("top:"):
+        return _fetch_toplist_songs(str(dissid)[4:], limit)
+    try:
+        diss_num = int(dissid)
+    except (ValueError, TypeError):
+        diss_num = dissid
+    return _fetch_diss_songs_page(diss_num, 0, limit)
+
+
+def fcg_get_playlist_songs_all(dissid: str, max_songs: int = 300) -> list:
+    """翻页抓取整个歌单（每页 100 首，最多 max_songs 首），用于整单收藏。"""
+    if str(dissid).startswith("top:"):
+        return _fetch_toplist_songs(str(dissid)[4:], max_songs)
+    try:
+        diss_num = int(dissid)
+    except (ValueError, TypeError):
+        diss_num = dissid
+
+    page_size = 100
+    out = []
+    for begin in range(0, max_songs, page_size):
+        page = _fetch_diss_songs_page(diss_num, begin, page_size)
+        out.extend(page)
+        if len(page) < page_size or len(out) >= max_songs:
+            break
+    return out[:max_songs]
 
 
 # ---------------- 歌单广场：分类 / 分页浏览 / 歌单搜索 ----------------
@@ -367,6 +389,7 @@ def fcg_search_playlists(keyword: str, page: int = 1, per_page: int = 20) -> dic
 # Aliases for convenience
 get_recommended_playlists = fcg_get_recommend_playlists
 get_playlist_songs = fcg_get_playlist_songs
+get_playlist_songs_all = fcg_get_playlist_songs_all
 get_playlist_categories = fcg_get_playlist_categories
 get_playlists_by_category = fcg_get_playlists_by_category
 search_playlists = fcg_search_playlists

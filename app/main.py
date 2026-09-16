@@ -262,6 +262,61 @@ async def play_recommendation(diss_id: str, request: Request, limit: int = 20, f
     return core.snapshot()
 
 
+class RecAddToPlaylistBody(BaseModel):
+    playlist_id: Optional[int] = None   # 加入已有歌单
+    new_name: str = ""                  # 或新建歌单名
+    description: str = ""
+
+
+@app.post("/api/recommendations/{diss_id}/add_to_playlist")
+async def rec_add_to_playlist(diss_id: str, body: RecAddToPlaylistBody, request: Request):
+    """把 QQ 音乐整个歌单收藏进本地歌单：playlist_id 指向已有歌单，否则用 new_name 新建。"""
+    user = require_user(request)
+    from .music_search import get_playlist_songs_all
+    # 先抓歌曲再动库：抓不到歌曲时不留空歌单
+    songs = await asyncio.to_thread(get_playlist_songs_all, diss_id, 300)
+    if not songs:
+        raise HTTPException(404, "该歌单暂无歌曲或获取失败")
+
+    conn = get_db()
+    if body.playlist_id:
+        pl = conn.execute("SELECT id, name FROM playlists WHERE id=?", (body.playlist_id,)).fetchone()
+        if not pl:
+            raise HTTPException(404, "目标歌单不存在")
+        pl_id, pl_name = pl["id"], pl["name"]
+    else:
+        pl_name = body.new_name.strip()[:40]
+        if not pl_name:
+            raise HTTPException(400, "请选择已有歌单或填写新歌单名")
+        cur = conn.execute(
+            "INSERT INTO playlists (name, description, created_by) VALUES (?, ?, ?)",
+            (pl_name, body.description, user["id"]))
+        pl_id = cur.lastrowid
+
+    # 目标歌单里已有的歌（按 songMid 去重），重复点击收藏不会塞进二份
+    existing = {r["song_mid"] for r in
+                conn.execute("SELECT song_mid FROM playlist_songs WHERE playlist_id=?", (pl_id,))
+                if r["song_mid"]}
+    pos = conn.execute(
+        "SELECT COALESCE(MAX(position),0) FROM playlist_songs WHERE playlist_id=?", (pl_id,)).fetchone()[0]
+    added = 0
+    for s in songs:
+        mid = (s.get("songMid") or "").strip()
+        if mid and mid in existing:
+            continue
+        pos += 1
+        conn.execute(
+            "INSERT INTO playlist_songs (playlist_id, position, song_mid, title, singer, added_by) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (pl_id, pos, mid, s.get("title", ""), s.get("singer", ""), user["id"]))
+        if mid:
+            existing.add(mid)
+        added += 1
+    conn.commit()
+    return {"playlistId": pl_id, "playlistName": pl_name,
+            "fetched": len(songs), "added": added, "skipped": len(songs) - added}
+
+
 # ---------------- 歌单广场（分类浏览 + 分页 + 歌单搜索） ----------------
 _cat_cache = {"groups": [], "at": 0.0}
 

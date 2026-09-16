@@ -338,6 +338,77 @@ function closePlaylistPicker() {
   if (plPickerEl) { plPickerEl.remove(); plPickerEl = null; }
 }
 
+// ---------- 整单收藏浮层：把 QQ 音乐歌单整个存进本地歌单（选已有或新建） ----------
+let recPlPickerEl = null;
+async function showRecToPlaylistPicker(x, y, pl) {
+  closeRecPlPicker();
+  const pop = document.createElement('div');
+  pop.className = 'pl-picker-pop rec-pl-pop';
+  pop.innerHTML = `
+    <h3 title="${esc(pl.title)}">收藏「${esc(pl.title)}」</h3>
+    <div class="pl-pop-new">
+      <input id="recPlNewName" placeholder="新歌单名，回车新建" maxlength="40">
+      <button class="mini-btn" id="recPlNewBtn">新建</button>
+    </div>
+    <div class="pl-pop-list"><div class="pl-pop-empty">加载歌单列表…</div></div>
+    <div class="pl-pop-msg" id="recPlPopMsg"></div>`;
+  document.body.appendChild(pop);
+  recPlPickerEl = pop;
+  const pw = 264, ph = 340;
+  pop.style.left = Math.min(x, window.innerWidth - pw - 12) + 'px';
+  pop.style.top = Math.min(y, window.innerHeight - ph - 12) + 'px';
+  pop.addEventListener('click', (e) => e.stopPropagation());
+  setTimeout(() => document.addEventListener('click', closeRecPlPicker, { once: true }), 0);
+
+  const listEl = pop.querySelector('.pl-pop-list');
+  const msgEl = pop.querySelector('.pl-pop-msg');
+  const nameInput = pop.querySelector('#recPlNewName');
+  let busy = false;
+
+  async function doAdd(target) {
+    if (busy) return;
+    if (target.new_name !== undefined && !target.new_name) {
+      msgEl.classList.add('err');
+      msgEl.textContent = '先给新歌单起个名字';
+      return;
+    }
+    busy = true;
+    pop.classList.add('is-busy');
+    msgEl.classList.remove('err');
+    msgEl.textContent = '正在获取整个歌单的歌曲…';
+    try {
+      const r = await api(`/api/recommendations/${pl.dissid}/add_to_playlist`, { method: 'POST', body: target });
+      msgEl.textContent = `✓ 已收藏 ${r.added} 首到「${r.playlistName}」` + (r.skipped ? `（跳过 ${r.skipped} 首重复）` : '');
+      setTimeout(closeRecPlPicker, 2200);
+    } catch (e) {
+      msgEl.classList.add('err');
+      msgEl.textContent = e.message;
+      busy = false;
+      pop.classList.remove('is-busy');
+    }
+  }
+
+  // 预填来源歌单名，通常点「新建」即可
+  nameInput.value = (pl.title || '').slice(0, 40);
+  pop.querySelector('#recPlNewBtn').onclick = () => doAdd({ new_name: nameInput.value.trim() });
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); doAdd({ new_name: nameInput.value.trim() }); }
+  });
+
+  try {
+    const { playlists } = await api('/api/playlists');
+    listEl.innerHTML = playlists.length
+      ? playlists.map(p => `<button class="pl-pop-item" data-id="${p.id}">${esc(p.name)}（${p.songCount}）</button>`).join('')
+      : '<div class="pl-pop-empty">还没有歌单，直接在上面输入名字新建。</div>';
+    listEl.querySelectorAll('.pl-pop-item').forEach(btn => btn.onclick = () => doAdd({ playlist_id: +btn.dataset.id }));
+  } catch (e) {
+    listEl.innerHTML = `<div class="pl-pop-empty">${esc(e.message)}</div>`;
+  }
+}
+function closeRecPlPicker() {
+  if (recPlPickerEl) { recPlPickerEl.remove(); recPlPickerEl = null; }
+}
+
 // ---------- 切歌状态管理与视觉反馈 ----------
 let isSwitching = false;
 let switchingTimer = null;
@@ -1086,8 +1157,9 @@ function renderRecGrid() {
         <div class="rec-name">${esc(p.title)}</div>
         <div class="rec-meta">${fmtListen(p.listennum)}</div>
         <div class="rec-actions">
-          <button class="mini-btn rec-play" data-dissid="${esc(p.dissid)}">播放全部</button>
-          <button class="mini-btn rec-enq" data-dissid="${esc(p.dissid)}">加入队列</button>
+          <button class="mini-btn rec-play" title="整个歌单依次加入播放队列" data-dissid="${esc(p.dissid)}">播放</button>
+          <button class="mini-btn rec-enq" title="整个歌单追加到队列末尾" data-dissid="${esc(p.dissid)}">入队</button>
+          <button class="mini-btn rec-toPl" title="收藏到本地歌单（选已有或新建）" data-dissid="${esc(p.dissid)}">收藏</button>
         </div>
       </div>
     </div>`).join('');
@@ -1098,6 +1170,13 @@ function renderRecGrid() {
   grid.querySelectorAll('.rec-enq').forEach(b => b.onclick = (e) => {
     e.stopPropagation();
     playRecommendation(b.dataset.dissid, true);
+  });
+  grid.querySelectorAll('.rec-toPl').forEach(b => b.onclick = (e) => {
+    e.stopPropagation();
+    const pl = recPlaylistsCache.find(x => String(x.dissid) === String(b.dataset.dissid));
+    if (!pl) return;
+    const rect = b.getBoundingClientRect();
+    showRecToPlaylistPicker(rect.left, rect.bottom + 4, pl);
   });
   grid.querySelectorAll('.rec-card').forEach(card => card.onclick = () => openRecModal(card.dataset.dissid));
 }
@@ -1127,6 +1206,7 @@ async function openRecModal(dissid) {
         <span>
           <button class="mini-btn rec-play-modal">播放全部</button>
           <button class="mini-btn rec-enq-modal">加入队列</button>
+          <button class="mini-btn rec-toPl-modal" title="收藏到本地歌单（选已有或新建）">收藏歌单</button>
           <button class="mini-btn rec-close">✕</button>
         </span>
       </div>
@@ -1137,6 +1217,11 @@ async function openRecModal(dissid) {
   mask.querySelector('.rec-close').onclick = () => mask.remove();
   mask.querySelector('.rec-play-modal').onclick = () => playRecommendation(dissid, false);
   mask.querySelector('.rec-enq-modal').onclick = () => playRecommendation(dissid, true);
+  mask.querySelector('.rec-toPl-modal').onclick = () => {
+    const b = mask.querySelector('.rec-toPl-modal');
+    const rect = b.getBoundingClientRect();
+    showRecToPlaylistPicker(rect.left, rect.bottom + 4, { dissid, title: pl ? pl.title : '歌单' });
+  };
   try {
     const { songs } = await api(`/api/recommendations/${dissid}/songs?limit=30`);
     const box = mask.querySelector('.modal-songs');
